@@ -1,0 +1,942 @@
+"""BOM & Inventory Procurement Dashboard — HEQA (local file version)."""
+
+import datetime
+import pandas as pd
+import streamlit as st
+
+from config import (
+    DATA_DIR,
+    BOM_VPN_COL,
+    BOM_LEVEL_COL,
+    BOM_QTY_COL,
+    BOM_DESC_COL,
+    BOM_MFR_COL,
+    BOM_FIND_NUM_COL,
+    INV_FILENAME,
+    INV_KEY_COL,
+    INV_QTY_COL,
+    PRICE_FILENAME,
+    TYPE_FILENAME,
+    TYPE_KEY_COL,
+    TYPE_COL,
+    SUPPORT_FILES,
+    SS_DATA,
+    SS_RESULTS,
+    SS_AUTH,
+    SS_MUST_CHANGE_PW,
+    SS_CURRENT_USER,
+    SS_FOLLOWUP,
+    SS_SITE_INV,
+    SS_IS_ADMIN,
+    LOGO_PATH,
+    INV_KEY_COL,
+    INV_QTY_COL,
+)
+from utils.bom_parser import load_bom_file
+from utils.inventory_parser import load_inventory
+from utils.price_parser import load_prices
+from utils.type_parser import load_types
+from utils.followup import load_followup, save_followup
+from utils.site_inventory import load_site_inventory
+from utils.calculator import (
+    aggregate_bom,
+    calculate_results,
+    get_kpis,
+    COL_REQUIRED,
+    COL_IN_STOCK,
+    COL_TO_ORDER,
+    COL_UNIT_PRICE,
+    COL_TOTAL_COST,
+    COL_ORDER_COST,
+    COL_STATUS,
+)
+
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="BOM & Inventory Dashboard — HEQA",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Global CSS ────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    /* Hide default Streamlit sidebar page navigation */
+    [data-testid="stSidebarNav"] { display: none; }
+    /* Metric card borders */
+    [data-testid="metric-container"] {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 10px 14px;
+    }
+    /* Right-align Hebrew text inside dataframe cells */
+    [data-testid="stDataFrame"] td {
+        direction: rtl;
+        text-align: right;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ── Auth helpers ─────────────────────────────────────────────────────────────
+def _secrets_path():
+    from pathlib import Path
+    return Path(__file__).parent / ".streamlit" / "secrets.toml"
+
+
+def _write_users(users_dict: dict):
+    """Write all users to secrets.toml (canonical writer for all user mutations)."""
+    lines = [
+        "# ── User accounts ──────────────────────────────────────────────────────────",
+        "# Add a new [users.USERNAME] block for each user.",
+        "# role = \"admin\" grants access to User Management.",
+        "# Set must_change_password = true to force a password reset on first login.",
+        "",
+    ]
+    for uname, udata in users_dict.items():
+        lines.append(f"[users.{uname}]")
+        lines.append(f'password = "{udata["password"]}"')
+        lines.append(f'role = "{udata.get("role", "user")}"')
+        must = str(udata.get("must_change_password", False)).lower()
+        lines.append(f"must_change_password = {must}")
+        lines.append("")
+    _secrets_path().write_text("\n".join(lines), encoding="utf-8")
+
+
+def _save_new_password(username: str, new_password: str):
+    """Rewrite secrets.toml updating only the given user's password and clearing the flag."""
+    users = st.secrets.get("users", {})
+    updated = {
+        uname: dict(udata) | ({"password": new_password, "must_change_password": False}
+                               if uname == username else {})
+        for uname, udata in users.items()
+    }
+    _write_users(updated)
+
+
+def _show_login():
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), use_container_width=True)
+            st.markdown("")
+        st.markdown("## 🔒 Login")
+        st.markdown("Please enter your credentials to continue.")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+        if submitted:
+            users = st.secrets.get("users", {})
+            if not users:
+                st.error("⚠️ No users configured — add [users.USERNAME] blocks to secrets.toml")
+                return
+            user_data = users.get(username)
+            if user_data and password == user_data["password"]:
+                st.session_state[SS_AUTH] = True
+                st.session_state[SS_CURRENT_USER] = username
+                must_change = bool(user_data.get("must_change_password", False))
+                st.session_state[SS_MUST_CHANGE_PW] = must_change
+                st.session_state[SS_IS_ADMIN] = user_data.get("role", "user") == "admin"
+                st.rerun()
+            else:
+                st.error("❌ Invalid username or password")
+
+
+def _show_change_password():
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), use_container_width=True)
+            st.markdown("")
+        st.markdown("## 🔑 Set New Password")
+        st.info("First login detected — please choose a new password before continuing.")
+        with st.form("change_pw_form"):
+            new_pw = st.text_input("New Password", type="password")
+            confirm_pw = st.text_input("Confirm New Password", type="password")
+            submitted = st.form_submit_button("Set Password", use_container_width=True)
+        if submitted:
+            if len(new_pw) < 6:
+                st.error("Password must be at least 6 characters.")
+                return
+            if new_pw != confirm_pw:
+                st.error("Passwords do not match.")
+                return
+            current_user = st.session_state.get(SS_CURRENT_USER, "")
+            _save_new_password(current_user, new_pw)
+            st.session_state[SS_MUST_CHANGE_PW] = False
+            st.success("✅ Password updated! Loading dashboard…")
+            st.rerun()
+
+
+# ── BOM drill-down helpers ────────────────────────────────────────────────────
+_BULK_PREFIXES = ("SCR", "SPC", "NUT", "WAS", "WIR")
+
+
+def _normalize_level(val) -> int:
+    """Convert BOM Level cell (int OR '.....8' string) to a plain integer."""
+    s = str(val).strip().lstrip(".")
+    try:
+        return int(float(s))
+    except Exception:
+        return 999
+
+
+def _get_assembly_children(bom_dfs: dict, vpn: str) -> pd.DataFrame:
+    """Return all BOM rows that are descendants of *vpn* across every BOM file.
+
+    Traverses the Level hierarchy: collects every row below the parent row
+    whose level is strictly deeper, stopping when the level returns to the
+    parent level or higher.
+    """
+    frames: list[pd.DataFrame] = []
+
+    for bom_name, df in bom_dfs.items():
+        if BOM_VPN_COL not in df.columns or BOM_LEVEL_COL not in df.columns:
+            continue
+
+        vpn_series = df[BOM_VPN_COL].astype(str).str.strip()
+        levels = [_normalize_level(v) for v in df[BOM_LEVEL_COL]]
+        n = len(df)
+
+        for i in range(n):
+            if vpn_series.iloc[i] != vpn:
+                continue
+            parent_level = levels[i]
+            rows = []
+            for j in range(i + 1, n):
+                if levels[j] <= parent_level:
+                    break
+                row = df.iloc[j].to_dict()
+                row["_bom_source"] = bom_name.replace(".xlsx", "")
+                row["_depth"] = levels[j] - parent_level   # 1 = direct child
+                rows.append(row)
+            if rows:
+                frames.append(pd.DataFrame(rows))
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    # Drop rows with empty VPN (assembly header rows, notes, etc.)
+    if BOM_VPN_COL in combined.columns:
+        combined = combined[
+            combined[BOM_VPN_COL].notna()
+            & (combined[BOM_VPN_COL].str.strip() != "")
+            & (combined[BOM_VPN_COL].str.lower() != "nan")
+        ]
+    return combined.reset_index(drop=True)
+
+
+# ── Login gate ────────────────────────────────────────────────────────────────
+if not st.session_state.get(SS_AUTH):
+    _show_login()
+    st.stop()
+
+# ── Forced password-change gate ───────────────────────────────────────────────
+if st.session_state.get(SS_MUST_CHANGE_PW):
+    _show_change_password()
+    st.stop()
+
+
+# ── Data loading (cached) ─────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Loading Excel files from data/ …")
+def _load_all_local() -> dict:
+    """Read every xlsx in DATA_DIR. Returns dict with bom, inventory, prices, types, errors."""
+    result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
+
+    if not DATA_DIR.exists():
+        result["errors"].append(f"Data folder not found: {DATA_DIR}")
+        return result
+
+    for path in sorted(DATA_DIR.glob("*.xlsx")):
+        name = path.name
+        try:
+            file_bytes = path.read_bytes()
+        except Exception as exc:
+            result["errors"].append(f"Cannot read '{name}': {exc}")
+            continue
+
+        if name == INV_FILENAME:
+            df, err = load_inventory(file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["inventory"] = df
+
+        elif name == PRICE_FILENAME:
+            df, err = load_prices(file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["prices"] = df
+
+        elif name == TYPE_FILENAME:
+            df, err = load_types(file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["types"] = df
+
+        else:
+            df, err = load_bom_file(name, file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["bom"][name] = df
+
+    return result
+
+
+def _do_refresh():
+    _load_all_local.clear()
+    st.session_state.pop(SS_DATA, None)
+    st.session_state.pop(SS_RESULTS, None)
+
+
+# ── Session state init ────────────────────────────────────────────────────────
+if SS_DATA not in st.session_state:
+    st.session_state[SS_DATA] = _load_all_local()
+
+if SS_FOLLOWUP not in st.session_state:
+    st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
+
+if SS_SITE_INV not in st.session_state:
+    st.session_state[SS_SITE_INV] = load_site_inventory(DATA_DIR)
+
+data = st.session_state[SS_DATA]
+bom_files: dict[str, pd.DataFrame] = data.get("bom", {})
+_inv = data.get("inventory")
+inventory_df: pd.DataFrame = _inv if _inv is not None else pd.DataFrame()
+_prices = data.get("prices")
+prices_df: pd.DataFrame = _prices if _prices is not None else pd.DataFrame()
+_types = data.get("types")
+types_df: pd.DataFrame = _types if _types is not None else pd.DataFrame()
+load_errors: list[str] = data.get("errors", [])
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 🗂️ Navigation")
+    st.button("🏠 Main Dashboard", use_container_width=True, disabled=True)
+    if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
+        st.switch_page("pages/1_Site_Inventory.py")
+    if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
+        st.switch_page("pages/2_System_Inventory.py")
+    if st.session_state.get(SS_IS_ADMIN):
+        if st.button("👥 Users", use_container_width=True, key="nav_users"):
+            st.switch_page("pages/3_User_Management.py")
+
+    st.markdown("---")
+    st.title("⚙️ Settings")
+
+    current_user = st.session_state.get(SS_CURRENT_USER, "")
+    if current_user:
+        st.caption(f"👤 Logged in as **{current_user}**")
+
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.pop(SS_AUTH, None)
+        st.session_state.pop(SS_CURRENT_USER, None)
+        st.rerun()
+
+    st.markdown("---")
+
+    if st.button("🔄 Refresh Data", use_container_width=True, help="Re-read all files from disk"):
+        _do_refresh()
+        st.rerun()
+
+    st.markdown("---")
+    st.caption(f"📁 `{DATA_DIR.name}/`")
+    st.caption(f"📊 BOMs: **{len(bom_files)}** file(s)")
+    st.caption(f"🗃️ System inventory: **{len(inventory_df):,}** rows")
+    _site_count = len(st.session_state.get(SS_SITE_INV, {}))
+    st.caption(f"🏭 Site inventory: **{_site_count:,}** parts")
+    st.caption(f"💲 Price rows: **{len(prices_df):,}**")
+    st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
+
+
+# ── Production Quantities ─────────────────────────────────────────────────────
+# Persist quantities across page navigation
+if "_qty_persist" not in st.session_state:
+    st.session_state["_qty_persist"] = {}
+
+qty_map: dict[str, int] = {}
+if bom_files:
+    st.markdown("### ⚙️ Production Quantities")
+    _bom_names = sorted(bom_files.keys())
+    _qty_cols = st.columns(len(_bom_names))
+    for col, bom_name in zip(_qty_cols, _bom_names):
+        label = bom_name.replace(".xlsx", "")
+        default_val = st.session_state["_qty_persist"].get(bom_name, 0)
+        with col:
+            qty = st.number_input(label, min_value=0, value=default_val, step=1, key=f"qty_{bom_name}")
+        qty_map[bom_name] = int(qty)
+        st.session_state["_qty_persist"][bom_name] = int(qty)
+else:
+    qty_map = {}
+
+st.markdown("---")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+if LOGO_PATH.exists():
+    logo_col, title_col = st.columns([1, 3])
+    with logo_col:
+        st.image(str(LOGO_PATH), width=180)
+    with title_col:
+        st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
+        st.caption("Component Procurement Analysis")
+else:
+    st.title("📦 BOM & Inventory Procurement Dashboard")
+    st.caption("HEQA — Component Procurement Analysis")
+
+# Load errors
+if load_errors:
+    with st.expander(f"⚠️ {len(load_errors)} file load error(s) — click to expand", expanded=True):
+        for err in load_errors:
+            st.error(err)
+
+# Calculate button
+col_btn, _ = st.columns([1, 5])
+with col_btn:
+    calc_clicked = st.button("🔢 Calculate", type="primary", use_container_width=True)
+
+if calc_clicked:
+    if not any(q > 0 for q in qty_map.values()):
+        st.warning("Set at least one production quantity before calculating.")
+    else:
+        with st.spinner("Calculating procurement requirements…"):
+            required_df = aggregate_bom(bom_files, qty_map)
+
+            # Merge system inventory + site inventory
+            site_inv_data = st.session_state.get(SS_SITE_INV, {})
+            if site_inv_data:
+                site_rows = [
+                    {INV_KEY_COL: vpn, INV_QTY_COL: d.get("qty", 0)}
+                    for vpn, d in site_inv_data.items()
+                ]
+                site_inv_df = pd.DataFrame(site_rows)
+                if inventory_df.empty:
+                    combined_inv = site_inv_df
+                else:
+                    combined_inv = pd.concat(
+                        [inventory_df[[INV_KEY_COL, INV_QTY_COL]], site_inv_df],
+                        ignore_index=True,
+                    )
+                    combined_inv = (
+                        combined_inv.groupby(INV_KEY_COL, as_index=False)[INV_QTY_COL].sum()
+                    )
+            else:
+                combined_inv = inventory_df
+
+            results = calculate_results(required_df, combined_inv, prices_df, types_df)
+            st.session_state[SS_RESULTS] = results
+
+results: pd.DataFrame | None = st.session_state.get(SS_RESULTS)
+
+if results is None:
+    st.info("Set production quantities in the sidebar and press **Calculate** to see results.")
+    st.stop()
+
+if results.empty:
+    st.warning("No parts found after calculation. Verify BOM files have rows at levels > 1.")
+    st.stop()
+
+# ── KPI Row ───────────────────────────────────────────────────────────────────
+kpis = get_kpis(results)
+st.markdown("### 📊 Summary")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Total Parts", f"{kpis['total_parts']:,}")
+c2.metric("✅ In Stock", f"{kpis['in_stock_count']:,}")
+c3.metric("🔴 Missing", f"{kpis['missing_count']:,}")
+c4.metric("Availability", f"{kpis['availability_pct']:.1f}%")
+c5.metric("⚠️ No Price", f"{kpis['no_price_count']:,}")
+c6.metric("Order Cost $", f"${kpis['order_cost']:,.0f}")
+
+st.markdown("---")
+
+# ── Filters ───────────────────────────────────────────────────────────────────
+st.markdown("### 🔍 Filters")
+fc1, fc2, fc3 = st.columns([2, 2, 3])
+
+with fc1:
+    type_vals = sorted(results["Type"].dropna().unique().tolist()) if "Type" in results.columns else []
+    if "BULK" not in type_vals:
+        type_vals = sorted(type_vals + ["BULK"])
+    type_options = ["All"] + type_vals
+    _default_type_idx = type_options.index("R") if "R" in type_options else 0
+    sel_type = st.selectbox("Part Type", type_options, index=_default_type_idx)
+
+with fc2:
+    status_options = ["All", "🔴 Missing", "🟠 Tracking", "✅ In Stock", "⚠️ No Price"]
+    sel_status = st.selectbox(
+        "Status",
+        status_options,
+        index=status_options.index("🔴 Missing"),
+    )
+
+with fc3:
+    search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
+
+# Apply filters
+df_show = results.copy()
+
+# ── Inject Order Status, PO #, Due Date, Qty Ordered from followup ────────────
+_followup = st.session_state.get(SS_FOLLOWUP, {})
+df_show["Order Status"] = df_show[BOM_VPN_COL].map(
+    lambda v: "🔵 Ordered" if v in _followup else "—"
+)
+df_show["PO #"] = df_show[BOM_VPN_COL].map(
+    lambda v: _followup[v].get("po", "") if v in _followup else ""
+)
+def _parse_date(s):
+    try:
+        return datetime.date.fromisoformat(s) if s else None
+    except (ValueError, TypeError):
+        return None
+
+df_show["Due Date"] = df_show[BOM_VPN_COL].map(
+    lambda v: _parse_date(_followup[v].get("due_date", "")) if v in _followup else None
+)
+df_show["Qty Ordered"] = pd.to_numeric(
+    df_show[BOM_VPN_COL].map(lambda v: _followup[v].get("qty_ordered") if v in _followup else None),
+    errors="coerce",
+)
+
+# Override Type to BULK for parts whose VPN starts with a known BULK prefix
+_bulk_mask = df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
+df_show.loc[_bulk_mask, "Type"] = "BULK"
+
+if sel_type != "All" and "Type" in df_show.columns:
+    df_show = df_show[df_show["Type"] == sel_type]
+    # Always exclude BULK-prefixed items from non-BULK type views
+    if sel_type != "BULK":
+        df_show = df_show[~df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)]
+
+if sel_status != "All":
+    if sel_status == "🔴 Missing" and COL_STATUS in df_show.columns:
+        # All missing parts — both unordered (red) and ordered-in-tracking (orange)
+        df_show = df_show[df_show[COL_STATUS].str.contains("Missing", na=False)]
+    elif sel_status == "🟠 Tracking" and COL_STATUS in df_show.columns:
+        # Only missing parts where an order has been placed
+        df_show = df_show[
+            df_show[COL_STATUS].str.contains("Missing", na=False)
+            & (df_show["Order Status"] == "🔵 Ordered")
+        ]
+    elif sel_status == "✅ In Stock" and COL_STATUS in df_show.columns:
+        df_show = df_show[df_show[COL_STATUS] == "✅ In Stock"]
+    elif sel_status == "⚠️ No Price" and COL_STATUS in df_show.columns:
+        df_show = df_show[df_show[COL_STATUS].str.contains("No Price", na=False)]
+
+if search:
+    s = search.lower()
+    mask = pd.Series([False] * len(df_show), index=df_show.index)
+    for col in [BOM_VPN_COL, "Description", "Manufacturer"]:
+        if col in df_show.columns:
+            mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
+    df_show = df_show[mask]
+
+st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+
+# Sort by Manufacturer
+if "Manufacturer" in df_show.columns:
+    df_show = df_show.sort_values("Manufacturer", ascending=True, na_position="last").reset_index(drop=True)
+
+# Rename VPN column for display
+df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N"})
+
+_table_height = max(200, len(df_show) * 35 + 50)
+
+# ── Status emoji indicator column ─────────────────────────────────────────────
+def _status_emoji(row: pd.Series) -> str:
+    po = str(row.get("PO #", "")).strip().lower()
+    if po == "ignore":
+        return "⬜"
+    is_ordered = row.get("Order Status", "—") == "🔵 Ordered"
+    status = str(row.get(COL_STATUS, ""))
+    if is_ordered and "Missing" in status:
+        return "🟠"
+    elif "Missing" in status:
+        return "🔴"
+    elif "In Stock" in status:
+        return "🟢"
+    else:
+        return "🟡"
+
+df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
+
+# ── Column config ──────────────────────────────────────────────────────────────
+_view_col_cfg = {
+    "●":            st.column_config.TextColumn("●", width="small"),
+    "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
+    "Description":  st.column_config.TextColumn("Description"),
+    "Manufacturer": st.column_config.TextColumn("Manufacturer"),
+    "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
+    "Type":         st.column_config.TextColumn("Type", width="small"),
+    COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
+    COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
+    COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
+    COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.2f"),
+    COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
+    COL_STATUS:     st.column_config.TextColumn("Status"),
+    "Order Status": st.column_config.TextColumn("Order Status", width="small"),
+    "PO #":         st.column_config.TextColumn("PO #", help="Type 'Ignore' to exclude from calculations."),
+    "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
+    "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
+}
+
+# ── Color legend ──────────────────────────────────────────────────────────────
+st.caption(
+    "🔴 Missing &nbsp;|&nbsp; "
+    "🟠 Ordered / tracking &nbsp;|&nbsp; "
+    "🟢 In stock &nbsp;|&nbsp; "
+    "🟡 Partial &nbsp;|&nbsp; "
+    "⬜ Ignored &nbsp;— edit **PO #**, **Due Date**, **Qty Ordered** directly, then click **Save Changes**."
+)
+
+# ── Editable results table ─────────────────────────────────────────────────────
+_editable_cols = {"PO #", "Due Date", "Qty Ordered"}
+_disabled_cols = [c for c in df_show.columns if c not in _editable_cols]
+
+edited_df = st.data_editor(
+    df_show,
+    column_config=_view_col_cfg,
+    disabled=_disabled_cols,
+    use_container_width=True,
+    height=_table_height,
+    hide_index=True,
+    key="main_table",
+)
+
+_save_col, _ = st.columns([1, 5])
+with _save_col:
+    if st.button("💾 Save Changes", use_container_width=True):
+        _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
+
+        for _, row in edited_df.iterrows():
+            vpn = str(row.get("Heqa P.N", ""))
+            po = str(row.get("PO #", "") or "").strip()
+            _due_raw = row.get("Due Date")
+            due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+            qty_ord = row.get("Qty Ordered")
+            qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+
+            was_tracked = vpn in _fup
+            manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
+            if po or due or qty_ord_val:
+                if vpn not in _fup:
+                    _fup[vpn] = {
+                        "date": datetime.date.today().isoformat(),
+                        "user": st.session_state.get(SS_CURRENT_USER, ""),
+                        "notes": "",
+                        "manually_marked": False,
+                    }
+                _fup[vpn]["po"] = po
+                _fup[vpn]["due_date"] = due
+                _fup[vpn]["qty_ordered"] = qty_ord_val
+            elif was_tracked and not manually_marked:
+                del _fup[vpn]
+
+        st.session_state[SS_FOLLOWUP] = _fup
+        save_followup(DATA_DIR, _fup)
+        st.success("✅ Saved!")
+        st.rerun()
+
+# ── Exports ───────────────────────────────────────────────────────────────────
+st.markdown("### 📥 Export")
+ec1, ec2, ec3 = st.columns(3)
+
+today = datetime.date.today().isoformat()
+
+with ec1:
+    to_order_df = df_show[df_show[COL_TO_ORDER] > 0].copy() if COL_TO_ORDER in df_show.columns else pd.DataFrame()
+    if not to_order_df.empty:
+        st.download_button(
+            "⬇️ Order List (CSV)",
+            data=to_order_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"order_list_{today}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.success("Nothing to order in current view.")
+
+with ec2:
+    no_price_df = (
+        df_show[df_show[COL_UNIT_PRICE].isna()].copy()
+        if COL_UNIT_PRICE in df_show.columns
+        else pd.DataFrame()
+    )
+    if not no_price_df.empty:
+        st.download_button(
+            "⬇️ No-Price List (CSV)",
+            data=no_price_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"no_price_{today}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.success("All parts have prices.")
+
+with ec3:
+    st.download_button(
+        "⬇️ Full View (CSV)",
+        data=df_show.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"bom_results_{today}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+# ── Assembly Drill-Down (P-type parts) ───────────────────────────────────────
+st.markdown("---")
+st.markdown("### 🔩 Assembly Drill-Down")
+st.caption("Select a manufactured assembly (P-type) to view all its sub-components from the BOM hierarchy.")
+
+# Build list of P-type VPNs from full results (exclude BULK prefixes)
+if "Type" in results.columns:
+    _p_mask = results["Type"] == "P"
+    _bulk_vpn_mask = results[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
+    _p_vpns = sorted(
+        results.loc[_p_mask & ~_bulk_vpn_mask, BOM_VPN_COL].dropna().unique().tolist()
+    )
+else:
+    _p_vpns = []
+
+if not _p_vpns:
+    st.info("No P-type assemblies found in the current results.")
+else:
+    _dd_col1, _dd_col2 = st.columns([3, 1])
+    with _dd_col1:
+        _sel_assy = st.selectbox(
+            "Assembly (P-type)",
+            options=["— Select an assembly —"] + _p_vpns,
+            key="assembly_drilldown_select",
+        )
+    with _dd_col2:
+        _direct_only = st.checkbox("Direct children only", value=False,
+                                   help="Show only the first level of children (depth = 1).\n"
+                                        "Uncheck to see all descendants at every level.")
+
+    if not _sel_assy.startswith("—"):
+        _children = _get_assembly_children(bom_files, _sel_assy)
+
+        if _children.empty:
+            st.info(f"No sub-components found in the BOM for **{_sel_assy}**.")
+        else:
+            if _direct_only:
+                _children = _children[_children["_depth"] == 1]
+
+            # ── Enrich children with Type and Inventory ───────────────────────
+            if not types_df.empty and TYPE_KEY_COL in types_df.columns:
+                _type_map = types_df.set_index(TYPE_KEY_COL)[TYPE_COL].to_dict()
+                _children["Type"] = (
+                    _children[BOM_VPN_COL].map(_type_map).fillna("—")
+                )
+            else:
+                _children["Type"] = "—"
+
+            # Override BULK prefixes
+            _c_bulk = _children[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
+            _children.loc[_c_bulk, "Type"] = "BULK"
+
+            if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
+                _inv_map = (
+                    inventory_df
+                    .drop_duplicates(subset=INV_KEY_COL)
+                    .set_index(INV_KEY_COL)[INV_QTY_COL]
+                )
+                _children["In Stock"] = pd.to_numeric(
+                    _children[BOM_VPN_COL].map(_inv_map), errors="coerce"
+                ).fillna(0).astype(int)
+            else:
+                _children["In Stock"] = 0
+
+            # ── Build display DataFrame ───────────────────────────────────────
+            _disp_cols_ordered = [
+                "_depth", BOM_FIND_NUM_COL, BOM_VPN_COL,
+                BOM_DESC_COL, BOM_QTY_COL, BOM_MFR_COL,
+                "Type", "In Stock", "_bom_source",
+            ]
+            _disp_cols = [c for c in _disp_cols_ordered if c in _children.columns]
+            _child_disp = _children[_disp_cols].rename(columns={
+                "_depth":        "Depth",
+                BOM_VPN_COL:     "Heqa P.N",
+                BOM_DESC_COL:    "Description",
+                BOM_QTY_COL:     "Qty / Assembly",
+                BOM_MFR_COL:     "Manufacturer",
+                "_bom_source":   "BOM File",
+            })
+
+            # ── Deduplicate: 1 row per P.N ───────────────────────────────────
+            if "Heqa P.N" in _child_disp.columns:
+                _agg_map = {c: "first" for c in _child_disp.columns if c != "Heqa P.N"}
+                if "BOM File" in _child_disp.columns:
+                    _agg_map["BOM File"] = lambda x: " | ".join(x.dropna().astype(str).unique())
+                _child_disp = (
+                    _child_disp
+                    .groupby("Heqa P.N", sort=False)
+                    .agg(_agg_map)
+                    .reset_index()
+                )
+
+            _n_unique = _child_disp["Heqa P.N"].nunique() if "Heqa P.N" in _child_disp.columns else len(_child_disp)
+            _n_boms   = _child_disp["BOM File"].nunique() if "BOM File" in _child_disp.columns else 1
+            st.caption(
+                f"Assembly **{_sel_assy}** → "
+                f"**{len(_child_disp):,}** rows · "
+                f"**{_n_unique}** unique P/Ns · "
+                f"across **{_n_boms}** BOM file(s)"
+            )
+
+            # Colour rows: red if 0 in stock, green if in stock
+            def _color_child_row(row: pd.Series) -> list[str]:
+                try:
+                    stock = int(row.get("In Stock", 0))
+                except Exception:
+                    stock = 0
+                if stock <= 0:
+                    return ["background-color: #ffd6d6"] * len(row)
+                return ["background-color: #d6f5d6"] * len(row)
+
+            _styled_children = _child_disp.style.apply(_color_child_row, axis=1)
+            st.dataframe(_styled_children, use_container_width=True, height=420)
+
+            # Export children list
+            _exp_col, _ = st.columns([1, 4])
+            with _exp_col:
+                st.download_button(
+                    "⬇️ Export Sub-Components (CSV)",
+                    data=_child_disp.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"children_{_sel_assy}_{datetime.date.today().isoformat()}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+# ── Follow-up — Track Placed Orders ──────────────────────────────────────────
+st.markdown("---")
+followup: dict = st.session_state.get(SS_FOLLOWUP, {})
+ordered_count = len(followup)
+label = f"📦 Follow-up — Orders Placed ({ordered_count} part{'s' if ordered_count != 1 else ''})"
+
+with st.expander(label, expanded=False):
+
+    # ── Mark new orders ───────────────────────────────────────────────────────
+    st.markdown("#### ✅ Mark Parts as Ordered")
+
+    # Only offer missing parts that are not already tracked
+    all_missing_vpns = (
+        results.loc[results[COL_TO_ORDER] > 0, BOM_VPN_COL].tolist()
+        if COL_TO_ORDER in results.columns else []
+    )
+    unordered_vpns = [v for v in all_missing_vpns if v not in followup]
+
+    if unordered_vpns:
+        with st.form("mark_ordered_form"):
+            to_mark = st.multiselect(
+                "Select parts to mark as ordered",
+                options=unordered_vpns,
+                help="Only missing & not-yet-tracked parts are shown here",
+            )
+            po_col, notes_col = st.columns(2)
+            with po_col:
+                po_number = st.text_input("PO Number (optional)")
+            with notes_col:
+                notes = st.text_input("Notes (optional, e.g. expected delivery)")
+            submitted = st.form_submit_button("✅ Mark as Ordered", use_container_width=True)
+
+        if submitted:
+            if to_mark:
+                for vpn in to_mark:
+                    followup[vpn] = {
+                        "po": po_number.strip(),
+                        "notes": notes.strip(),
+                        "date": datetime.date.today().isoformat(),
+                        "user": st.session_state.get(SS_CURRENT_USER, ""),
+                        "manually_marked": True,
+                        "due_date": "",
+                        "qty_ordered": None,
+                    }
+                st.session_state[SS_FOLLOWUP] = followup
+                save_followup(DATA_DIR, followup)
+                st.rerun()
+            else:
+                st.warning("Select at least one part.")
+    else:
+        st.info("All missing parts are already tracked as ordered.")
+
+    # ── View & delete ──────────────────────────────────────────────────────────
+    if followup:
+        st.markdown(f"#### 📋 Already Ordered ({len(followup)} parts)")
+        st.caption("Check the **Delete** box on any row then click **Delete Selected** to remove it.")
+
+        fo_rows = []
+        for vpn, d in followup.items():
+            desc = ""
+            match = results.loc[results[BOM_VPN_COL] == vpn, "Description"]
+            if not match.empty:
+                desc = str(match.iloc[0])
+            fo_rows.append({
+                "Delete": False,
+                "Heqa P.N": vpn,
+                "Description": desc,
+                "PO #": d.get("po", ""),
+                "Due Date": _parse_date(d.get("due_date", "")),
+                "Qty Ordered": d.get("qty_ordered") or None,
+                "Order Date": d.get("date", ""),
+                "By": d.get("user", ""),
+                "Notes": d.get("notes", ""),
+            })
+
+        fo_df = pd.DataFrame(fo_rows)
+        edited_fo = st.data_editor(
+            fo_df,
+            column_config={
+                "Delete":      st.column_config.CheckboxColumn("Delete", help="Check to delete this entry"),
+                "Heqa P.N":    st.column_config.Column(disabled=True),
+                "Description": st.column_config.Column(disabled=True),
+                "PO #":        st.column_config.TextColumn("PO #"),
+                "Due Date":    st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
+                "Qty Ordered": st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
+                "Order Date":  st.column_config.Column(disabled=True),
+                "By":          st.column_config.Column(disabled=True),
+                "Notes":       st.column_config.Column(disabled=True),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="followup_table",
+        )
+
+        del_col, save_col, _ = st.columns([1, 1, 3])
+        with save_col:
+            if st.button("💾 Save Changes", use_container_width=True, key="save_fo_edits"):
+                _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
+                for _, row in edited_fo.iterrows():
+                    vpn = str(row.get("Heqa P.N", ""))
+                    if vpn not in _fup:
+                        continue
+                    po = str(row.get("PO #", "") or "").strip()
+                    _due_raw = row.get("Due Date")
+                    due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+                    qty_ord = row.get("Qty Ordered")
+                    qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+                    _fup[vpn]["po"] = po
+                    _fup[vpn]["due_date"] = due
+                    _fup[vpn]["qty_ordered"] = qty_ord_val
+                st.session_state[SS_FOLLOWUP] = _fup
+                save_followup(DATA_DIR, _fup)
+                st.success("✅ Saved!")
+                st.rerun()
+        with del_col:
+            if st.button("🗑️ Delete Selected", use_container_width=True):
+                to_delete = edited_fo.loc[edited_fo["Delete"] == True, "Heqa P.N"].tolist()
+                if to_delete:
+                    for vpn in to_delete:
+                        followup.pop(vpn, None)
+                    st.session_state[SS_FOLLOWUP] = followup
+                    save_followup(DATA_DIR, followup)
+                    st.rerun()
+                else:
+                    st.warning("No rows checked for deletion.")
