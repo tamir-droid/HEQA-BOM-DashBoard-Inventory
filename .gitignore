@@ -1,0 +1,20 @@
+bom-dashboard/.streamlit/secrets.toml
+bom-dashboard/__pycache__/
+bom-dashboard/**/__pycache__/
+*.pyc
+.env
+
+# Data files (contain sensitive company data — upload via the app)
+data/
+Data/
+
+# IDE / tool config
+.cursor/
+.claude/
+
+# BMAD agent output
+_bmad/
+_bmad-output/
+
+# Temp scripts
+temp_*.py
