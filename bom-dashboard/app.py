@@ -739,7 +739,7 @@ else:
 if not _p_vpns:
     st.info("No P-type assemblies found in the current results.")
 else:
-    _dd_col1, _dd_col2 = st.columns([3, 1])
+    _dd_col1, _dd_col2, _dd_col3 = st.columns([3, 3, 1])
     with _dd_col1:
         _sel_assy = st.selectbox(
             "Assembly (P-type)",
@@ -747,6 +747,26 @@ else:
             key="assembly_drilldown_select",
         )
     with _dd_col2:
+        if not _sel_assy.startswith("—"):
+            # Look up description from results or BOM files
+            _assy_desc = ""
+            if "Description" in results.columns:
+                _desc_match = results.loc[
+                    results[BOM_VPN_COL].astype(str).str.strip() == _sel_assy, "Description"
+                ]
+                if not _desc_match.empty:
+                    _assy_desc = str(_desc_match.iloc[0])
+            if not _assy_desc:
+                for _bf in bom_files.values():
+                    if BOM_VPN_COL in _bf.columns and BOM_DESC_COL in _bf.columns:
+                        _m = _bf.loc[_bf[BOM_VPN_COL].astype(str).str.strip() == _sel_assy, BOM_DESC_COL]
+                        if not _m.empty:
+                            _assy_desc = str(_m.iloc[0])
+                            break
+            if _assy_desc:
+                st.markdown("**Description**")
+                st.info(_assy_desc)
+    with _dd_col3:
         _direct_only = st.checkbox("Direct children only", value=False,
                                    help="Show only the first level of children (depth = 1).\n"
                                         "Uncheck to see all descendants at every level.")
