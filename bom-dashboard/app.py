@@ -560,7 +560,17 @@ if search:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
 
-st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+_cap_col, _cost_col1, _cost_col2 = st.columns([3, 2, 2])
+with _cap_col:
+    st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+with _cost_col1:
+    if COL_ORDER_COST in df_show.columns:
+        _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
+        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.0f}")
+with _cost_col2:
+    if COL_TOTAL_COST in df_show.columns:
+        _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
+        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.0f}")
 
 # Sort by Manufacturer
 if "Manufacturer" in df_show.columns:
