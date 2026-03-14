@@ -19,6 +19,7 @@ from config import (
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
+from utils.bom_parser import load_bom_file
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -97,6 +98,17 @@ for col, (fname, label, hint) in zip(cols, files_info):
             st.success(f"✅ **{label}**\n\n`{fname}`\n\n{info}")
         else:
             st.error(f"❌ **{label}**\n\n`{fname}`\n\nNot uploaded yet")
+
+# BOM files status
+st.markdown("#### 📋 BOM Files")
+bom_files_on_disk = [p for p in DATA_DIR.glob("*.xlsx")
+                     if p.name not in (INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME)] if DATA_DIR.exists() else []
+if bom_files_on_disk:
+    for bf in sorted(bom_files_on_disk):
+        size_kb = bf.stat().st_size / 1024
+        st.success(f"✅ `{bf.name}` — {size_kb:,.0f} KB")
+else:
+    st.error("❌ No BOM files uploaded yet — upload them below in section 4️⃣")
 
 st.markdown("---")
 
@@ -208,6 +220,45 @@ if type_upload is not None:
                     (DATA_DIR / TYPE_FILENAME).write_bytes(file_bytes)
                     _invalidate_cache()
                     st.success(f"✅ `{TYPE_FILENAME}` saved ({len(df_preview):,} rows).")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"❌ {exc}")
+
+st.markdown("---")
+
+# ── 4. BOM Files ──────────────────────────────────────────────────────────────
+st.markdown("### 4️⃣ BOM Files — `SYS-*.xlsx`")
+st.caption("Upload one or more BOM Excel files (sheet: **DataSheet**, must have **Level** and **Vendor Part Number** columns). You can upload all 5 at once.")
+
+bom_uploads = st.file_uploader(
+    "Choose BOM file(s)",
+    type=["xlsx", "xls"],
+    accept_multiple_files=True,
+    key="bom_upload",
+)
+
+if bom_uploads:
+    valid_boms = []
+    for uf in bom_uploads:
+        file_bytes = uf.read()
+        df_bom, bom_err = load_bom_file(uf.name, file_bytes)
+        if bom_err:
+            st.error(f"❌ `{uf.name}`: {bom_err}")
+        else:
+            st.success(f"✅ `{uf.name}` — {len(df_bom):,} parts parsed")
+            valid_boms.append((uf.name, file_bytes))
+
+    if valid_boms:
+        st.warning(f"⚠️ This will **save/overwrite** {len(valid_boms)} BOM file(s) in `data/`.")
+        save_col, _ = st.columns([1, 5])
+        with save_col:
+            if st.button("💾 Save BOM Files", type="primary", use_container_width=True, key="save_boms"):
+                try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    for fname, fbytes in valid_boms:
+                        (DATA_DIR / fname).write_bytes(fbytes)
+                    _invalidate_cache()
+                    st.success(f"✅ {len(valid_boms)} BOM file(s) saved. Go to Main Dashboard and press **Calculate**.")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"❌ {exc}")

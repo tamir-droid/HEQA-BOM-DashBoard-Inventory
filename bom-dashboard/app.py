@@ -369,14 +369,17 @@ qty_map: dict[str, int] = {}
 if bom_files:
     st.markdown("### ⚙️ Production Quantities")
     _bom_names = sorted(bom_files.keys())
-    _qty_cols = st.columns(len(_bom_names))
-    for col, bom_name in zip(_qty_cols, _bom_names):
-        label = bom_name.replace(".xlsx", "")
-        default_val = st.session_state["_qty_persist"].get(bom_name, 0)
-        with col:
-            qty = st.number_input(label, min_value=0, value=default_val, step=1, key=f"qty_{bom_name}")
-        qty_map[bom_name] = int(qty)
-        st.session_state["_qty_persist"][bom_name] = int(qty)
+    _chunk_size = 3
+    for _i in range(0, len(_bom_names), _chunk_size):
+        _row_names = _bom_names[_i:_i + _chunk_size]
+        _row_cols = st.columns(_chunk_size)
+        for col, bom_name in zip(_row_cols, _row_names):
+            label = bom_name.replace(".xlsx", "")
+            default_val = st.session_state["_qty_persist"].get(bom_name, 0)
+            with col:
+                qty = st.number_input(label, min_value=0, value=default_val, step=1, key=f"qty_{bom_name}")
+            qty_map[bom_name] = int(qty)
+            st.session_state["_qty_persist"][bom_name] = int(qty)
 else:
     qty_map = {}
 
