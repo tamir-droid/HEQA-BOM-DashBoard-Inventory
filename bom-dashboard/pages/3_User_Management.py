@@ -11,6 +11,7 @@ from config import (
     LOGO_PATH,
     SS_AUTH, SS_CURRENT_USER, SS_IS_ADMIN,
 )
+from utils.user_store import read_users, write_users
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -45,37 +46,7 @@ if not st.session_state.get(SS_IS_ADMIN):
     st.stop()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def _secrets_path() -> Path:
-    return Path(__file__).parent.parent / ".streamlit" / "secrets.toml"
-
-
-def _read_users() -> dict:
-    """Read users directly from secrets.toml (bypasses st.secrets cache)."""
-    import tomllib
-    path = _secrets_path()
-    if not path.exists():
-        return {}
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    return data.get("users", {})
-
-
-def _write_users(users_dict: dict):
-    """Write all users to secrets.toml."""
-    lines = [
-        "# ── User accounts ──────────────────────────────────────────────────────────",
-        "# role = \"admin\" grants access to User Management.",
-        "# Set must_change_password = true to force password reset on next login.",
-        "",
-    ]
-    for uname, udata in users_dict.items():
-        lines.append(f"[users.{uname}]")
-        lines.append(f'password = "{udata["password"]}"')
-        lines.append(f'role = "{udata.get("role", "user")}"')
-        must = str(udata.get("must_change_password", False)).lower()
-        lines.append(f"must_change_password = {must}")
-        lines.append("")
-    _secrets_path().write_text("\n".join(lines), encoding="utf-8")
+# read_users / write_users imported from utils.user_store
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -92,10 +63,10 @@ else:
 current_user = st.session_state.get(SS_CURRENT_USER, "")
 
 # ── Load users ────────────────────────────────────────────────────────────────
-users = _read_users()
+users = read_users()
 
 if not users:
-    st.error("Could not read users from secrets.toml.")
+    st.error("No users found. Add [users.USERNAME] blocks to Streamlit Cloud Secrets.")
     st.stop()
 
 # ── Current users table ───────────────────────────────────────────────────────
@@ -142,7 +113,7 @@ with btn_save:
                 updated[uname] = dict(updated[uname])
                 updated[uname]["role"] = row["Role"]
                 updated[uname]["must_change_password"] = bool(row["Must Change Password"])
-        _write_users(updated)
+        write_users(updated)
         st.success("✅ Saved. Changes take effect on next login.")
         st.rerun()
 
@@ -165,7 +136,7 @@ with btn_del:
             st.error("❌ You cannot delete your own account.")
         else:
             updated = {u: d for u, d in users.items() if u not in to_delete}
-            _write_users(updated)
+            write_users(updated)
             st.success(f"✅ Deleted: {', '.join(to_delete)}. Changes take effect on next login.")
             st.rerun()
 
@@ -204,7 +175,7 @@ if add_btn:
             "role": new_role,
             "must_change_password": force_reset,
         }
-        _write_users(updated)
+        write_users(updated)
         st.success(f"✅ User **{uname}** added with role **{new_role}**.")
         st.rerun()
 
@@ -227,6 +198,6 @@ if reset_btn:
         updated[reset_user] = dict(updated[reset_user])
         updated[reset_user]["password"] = new_pw
         updated[reset_user]["must_change_password"] = force
-        _write_users(updated)
+        write_users(updated)
         st.success(f"✅ Password reset for **{reset_user}**.")
         st.rerun()

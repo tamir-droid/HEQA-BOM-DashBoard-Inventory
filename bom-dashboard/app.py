@@ -83,39 +83,17 @@ st.markdown(
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
-def _secrets_path():
-    from pathlib import Path
-    return Path(__file__).parent / ".streamlit" / "secrets.toml"
-
-
-def _write_users(users_dict: dict):
-    """Write all users to secrets.toml (canonical writer for all user mutations)."""
-    lines = [
-        "# ── User accounts ──────────────────────────────────────────────────────────",
-        "# Add a new [users.USERNAME] block for each user.",
-        "# role = \"admin\" grants access to User Management.",
-        "# Set must_change_password = true to force a password reset on first login.",
-        "",
-    ]
-    for uname, udata in users_dict.items():
-        lines.append(f"[users.{uname}]")
-        lines.append(f'password = "{udata["password"]}"')
-        lines.append(f'role = "{udata.get("role", "user")}"')
-        must = str(udata.get("must_change_password", False)).lower()
-        lines.append(f"must_change_password = {must}")
-        lines.append("")
-    _secrets_path().write_text("\n".join(lines), encoding="utf-8")
+from utils.user_store import read_users, write_users as _write_users
 
 
 def _save_new_password(username: str, new_password: str):
-    """Rewrite secrets.toml updating only the given user's password and clearing the flag."""
-    users = st.secrets.get("users", {})
-    updated = {
-        uname: dict(udata) | ({"password": new_password, "must_change_password": False}
-                               if uname == username else {})
-        for uname, udata in users.items()
-    }
-    _write_users(updated)
+    """Update password in user store and clear must_change_password flag."""
+    users = read_users()
+    if username in users:
+        users[username] = dict(users[username])
+        users[username]["password"] = new_password
+        users[username]["must_change_password"] = False
+    _write_users(users)
 
 
 def _show_login():
@@ -131,9 +109,9 @@ def _show_login():
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Login", use_container_width=True)
         if submitted:
-            users = st.secrets.get("users", {})
+            users = read_users()
             if not users:
-                st.error("⚠️ No users configured — add [users.USERNAME] blocks to secrets.toml")
+                st.error("⚠️ No users configured — add [users.USERNAME] blocks to Streamlit Cloud Secrets")
                 return
             user_data = users.get(username)
             if user_data and password == user_data["password"]:
