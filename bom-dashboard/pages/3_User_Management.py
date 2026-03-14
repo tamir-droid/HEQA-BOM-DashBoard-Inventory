@@ -53,7 +53,7 @@ if not st.session_state.get(SS_IS_ADMIN):
 if LOGO_PATH.exists():
     logo_col, title_col = st.columns([1, 3])
     with logo_col:
-        st.image(str(LOGO_PATH), width=140)
+        st.image(LOGO_PATH.read_bytes(), width=140)
     with title_col:
         st.markdown("# 👥 User Management")
         st.caption("Add, delete, or manage users. Admin access only.")

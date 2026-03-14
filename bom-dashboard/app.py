@@ -100,7 +100,7 @@ def _show_login():
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
+            st.image(LOGO_PATH.read_bytes(), use_container_width=True)
             st.markdown("")
         st.markdown("## 🔒 Login")
         st.markdown("Please enter your credentials to continue.")
@@ -129,7 +129,7 @@ def _show_change_password():
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
+            st.image(LOGO_PATH.read_bytes(), use_container_width=True)
             st.markdown("")
         st.markdown("## 🔑 Set New Password")
         st.info("First login detected — please choose a new password before continuing.")
@@ -338,6 +338,20 @@ with st.sidebar:
     st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
 
 
+# ── Header ────────────────────────────────────────────────────────────────────
+if LOGO_PATH.exists():
+    logo_col, title_col = st.columns([1, 3])
+    with logo_col:
+        st.image(LOGO_PATH.read_bytes(), width=180)
+    with title_col:
+        st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
+        st.caption("Component Procurement Analysis")
+else:
+    st.title("📦 BOM & Inventory Procurement Dashboard")
+    st.caption("HEQA — Component Procurement Analysis")
+
+st.markdown("---")
+
 # ── Production Quantities ─────────────────────────────────────────────────────
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
@@ -364,17 +378,6 @@ else:
 st.markdown("---")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-if LOGO_PATH.exists():
-    logo_col, title_col = st.columns([1, 3])
-    with logo_col:
-        st.image(str(LOGO_PATH), width=180)
-    with title_col:
-        st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
-        st.caption("Component Procurement Analysis")
-else:
-    st.title("📦 BOM & Inventory Procurement Dashboard")
-    st.caption("HEQA — Component Procurement Analysis")
-
 # Load errors
 if load_errors:
     with st.expander(f"⚠️ {len(load_errors)} file load error(s) — click to expand", expanded=True):

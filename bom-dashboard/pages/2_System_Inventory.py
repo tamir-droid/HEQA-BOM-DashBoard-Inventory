@@ -59,7 +59,7 @@ if not st.session_state.get(SS_AUTH):
 if LOGO_PATH.exists():
     logo_col, title_col = st.columns([1, 3])
     with logo_col:
-        st.image(str(LOGO_PATH), width=180)
+        st.image(LOGO_PATH.read_bytes(), width=180)
     with title_col:
         st.markdown("# 📦 System Inventory")
         st.caption(
