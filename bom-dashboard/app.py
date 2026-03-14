@@ -360,18 +360,54 @@ if "_qty_persist" not in st.session_state:
 qty_map: dict[str, int] = {}
 if bom_files:
     st.markdown("### ⚙️ Production Quantities")
+    st.markdown("""<style>
+    .qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+    </style>""", unsafe_allow_html=True)
+
     _bom_names = sorted(bom_files.keys())
-    _chunk_size = 3
-    for _i in range(0, len(_bom_names), _chunk_size):
-        _row_names = _bom_names[_i:_i + _chunk_size]
-        _row_cols = st.columns(_chunk_size)
-        for col, bom_name in zip(_row_cols, _row_names):
-            label = bom_name.replace(".xlsx", "")
+    _names_1550  = sorted([n for n in _bom_names if "1550" in n])
+    _names_1310  = sorted([n for n in _bom_names if "1310" in n])
+    _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
+    _names_other = [n for n in _bom_names
+                    if n not in _names_1550 + _names_1310 + _names_br3]
+
+    def _short(name: str) -> str:
+        return (name.replace(".xlsx", "")
+                    .replace("SYS-SP1-1-", "SP1-")
+                    .replace("SYS-", ""))
+
+    def _qty_input(col, bom_name):
+        with col:
+            st.markdown(f'<p class="qty-label">{_short(bom_name)}</p>',
+                        unsafe_allow_html=True)
             default_val = st.session_state["_qty_persist"].get(bom_name, 0)
-            with col:
-                qty = st.number_input(label, min_value=0, value=default_val, step=1, key=f"qty_{bom_name}")
-            qty_map[bom_name] = int(qty)
-            st.session_state["_qty_persist"][bom_name] = int(qty)
+            qty = st.number_input("qty", min_value=0, value=default_val, step=1,
+                                  key=f"qty_{bom_name}", label_visibility="collapsed")
+        qty_map[bom_name] = int(qty)
+        st.session_state["_qty_persist"][bom_name] = int(qty)
+
+    # Column layout: [1550-D, 1550-L, gap, BR3]
+    _n_left = max(len(_names_1550), len(_names_1310), 1)
+    _col_spec = [2] * _n_left + ([0.4, 2] if _names_br3 else [])
+
+    # Row 1 — 1550 systems (left) + BR3 (right)
+    _r1 = st.columns(_col_spec)
+    for _i, _n in enumerate(_names_1550):
+        _qty_input(_r1[_i], _n)
+    if _names_br3:
+        _qty_input(_r1[-1], _names_br3[0])
+
+    # Row 2 — 1310 systems (left), BR3 column left empty
+    if _names_1310:
+        _r2 = st.columns(_col_spec)
+        for _i, _n in enumerate(_names_1310):
+            _qty_input(_r2[_i], _n)
+
+    # Any other BOM files
+    if _names_other:
+        _ro = st.columns(min(3, len(_names_other)))
+        for _col, _n in zip(_ro, _names_other):
+            _qty_input(_col, _n)
 else:
     qty_map = {}
 
