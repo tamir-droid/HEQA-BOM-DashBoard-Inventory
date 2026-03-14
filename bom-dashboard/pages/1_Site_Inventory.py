@@ -129,6 +129,7 @@ if inv_upload is not None:
         with save_col:
             if st.button("💾 Save Inventory File", type="primary", use_container_width=True, key="save_inv"):
                 try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
                     (DATA_DIR / INV_FILENAME).write_bytes(file_bytes)
                     _invalidate_cache()
                     st.success(f"✅ `{INV_FILENAME}` saved ({len(df_preview):,} rows).")
@@ -165,6 +166,7 @@ if price_upload is not None:
         with save_col:
             if st.button("💾 Save Cost File", type="primary", use_container_width=True, key="save_price"):
                 try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
                     (DATA_DIR / PRICE_FILENAME).write_bytes(file_bytes)
                     _invalidate_cache()
                     st.success(f"✅ `{PRICE_FILENAME}` saved ({len(df_preview):,} rows).")
@@ -202,6 +204,7 @@ if type_upload is not None:
         with save_col:
             if st.button("💾 Save Buy & Make File", type="primary", use_container_width=True, key="save_type"):
                 try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
                     (DATA_DIR / TYPE_FILENAME).write_bytes(file_bytes)
                     _invalidate_cache()
                     st.success(f"✅ `{TYPE_FILENAME}` saved ({len(df_preview):,} rows).")
