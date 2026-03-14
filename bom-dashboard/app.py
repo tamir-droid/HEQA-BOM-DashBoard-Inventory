@@ -764,8 +764,7 @@ else:
                             _assy_desc = str(_m.iloc[0])
                             break
             if _assy_desc:
-                st.markdown("**Description**")
-                st.info(_assy_desc)
+                st.markdown(f"**Description:** {_assy_desc}")
     with _dd_col3:
         _direct_only = st.checkbox("Direct children only", value=False,
                                    help="Show only the first level of children (depth = 1).\n"
