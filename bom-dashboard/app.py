@@ -249,8 +249,9 @@ def _load_all_local() -> dict:
     """Read every xlsx in DATA_DIR. Returns dict with bom, inventory, prices, types, errors."""
     result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
 
-    if not DATA_DIR.exists():
-        result["errors"].append(f"Data folder not found: {DATA_DIR}")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not any(DATA_DIR.glob("*.xlsx")):
+        result["errors"].append("No data files uploaded yet — go to 📤 Upload Files to add your Excel files.")
         return result
 
     for path in sorted(DATA_DIR.glob("*.xlsx")):
