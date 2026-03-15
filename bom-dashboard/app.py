@@ -83,46 +83,24 @@ st.markdown(
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
-def _secrets_path():
-    from pathlib import Path
-    return Path(__file__).parent / ".streamlit" / "secrets.toml"
-
-
-def _write_users(users_dict: dict):
-    """Write all users to secrets.toml (canonical writer for all user mutations)."""
-    lines = [
-        "# ── User accounts ──────────────────────────────────────────────────────────",
-        "# Add a new [users.USERNAME] block for each user.",
-        "# role = \"admin\" grants access to User Management.",
-        "# Set must_change_password = true to force a password reset on first login.",
-        "",
-    ]
-    for uname, udata in users_dict.items():
-        lines.append(f"[users.{uname}]")
-        lines.append(f'password = "{udata["password"]}"')
-        lines.append(f'role = "{udata.get("role", "user")}"')
-        must = str(udata.get("must_change_password", False)).lower()
-        lines.append(f"must_change_password = {must}")
-        lines.append("")
-    _secrets_path().write_text("\n".join(lines), encoding="utf-8")
+from utils.user_store import read_users, write_users as _write_users
 
 
 def _save_new_password(username: str, new_password: str):
-    """Rewrite secrets.toml updating only the given user's password and clearing the flag."""
-    users = st.secrets.get("users", {})
-    updated = {
-        uname: dict(udata) | ({"password": new_password, "must_change_password": False}
-                               if uname == username else {})
-        for uname, udata in users.items()
-    }
-    _write_users(updated)
+    """Update password in user store and clear must_change_password flag."""
+    users = read_users()
+    if username in users:
+        users[username] = dict(users[username])
+        users[username]["password"] = new_password
+        users[username]["must_change_password"] = False
+    _write_users(users)
 
 
 def _show_login():
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
+            st.image(LOGO_PATH.read_bytes(), use_container_width=True)
             st.markdown("")
         st.markdown("## 🔒 Login")
         st.markdown("Please enter your credentials to continue.")
@@ -131,9 +109,9 @@ def _show_login():
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Login", use_container_width=True)
         if submitted:
-            users = st.secrets.get("users", {})
+            users = read_users()
             if not users:
-                st.error("⚠️ No users configured — add [users.USERNAME] blocks to secrets.toml")
+                st.error("⚠️ No users configured — add [users.USERNAME] blocks to Streamlit Cloud Secrets")
                 return
             user_data = users.get(username)
             if user_data and password == user_data["password"]:
@@ -151,7 +129,7 @@ def _show_change_password():
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
+            st.image(LOGO_PATH.read_bytes(), use_container_width=True)
             st.markdown("")
         st.markdown("## 🔑 Set New Password")
         st.info("First login detected — please choose a new password before continuing.")
@@ -249,8 +227,9 @@ def _load_all_local() -> dict:
     """Read every xlsx in DATA_DIR. Returns dict with bom, inventory, prices, types, errors."""
     result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
 
-    if not DATA_DIR.exists():
-        result["errors"].append(f"Data folder not found: {DATA_DIR}")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not any(DATA_DIR.glob("*.xlsx")):
+        result["errors"].append("No data files uploaded yet — go to 📤 Upload Files to add your Excel files.")
         return result
 
     for path in sorted(DATA_DIR.glob("*.xlsx")):
@@ -359,33 +338,80 @@ with st.sidebar:
     st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
 
 
-# ── Production Quantities ─────────────────────────────────────────────────────
+# ── Production Quantities (above title) ───────────────────────────────────────
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
 
+st.markdown("""<style>
+.qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+</style>""", unsafe_allow_html=True)
+
 qty_map: dict[str, int] = {}
 if bom_files:
     st.markdown("### ⚙️ Production Quantities")
+
     _bom_names = sorted(bom_files.keys())
-    _qty_cols = st.columns(len(_bom_names))
-    for col, bom_name in zip(_qty_cols, _bom_names):
-        label = bom_name.replace(".xlsx", "")
-        default_val = st.session_state["_qty_persist"].get(bom_name, 0)
+    _names_1550  = sorted([n for n in _bom_names if "1550" in n])
+    _names_1310  = sorted([n for n in _bom_names if "1310" in n])
+    _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
+    _names_other = [n for n in _bom_names
+                    if n not in _names_1550 + _names_1310 + _names_br3]
+
+    def _short(name: str) -> str:
+        return (name.replace(".xlsx", "")
+                    .replace("SYS-SP1-1-", "SP1-")
+                    .replace("SYS-", ""))
+
+    def _qty_input(col, bom_name):
         with col:
-            qty = st.number_input(label, min_value=0, value=default_val, step=1, key=f"qty_{bom_name}")
+            st.markdown(f'<p class="qty-label">{_short(bom_name)}</p>',
+                        unsafe_allow_html=True)
+            default_val = st.session_state["_qty_persist"].get(bom_name, 0)
+            qty = st.number_input("qty", min_value=0, value=default_val, step=1,
+                                  key=f"qty_{bom_name}", label_visibility="collapsed")
         qty_map[bom_name] = int(qty)
         st.session_state["_qty_persist"][bom_name] = int(qty)
+
+    # Column layout: [1550-D, 1550-L, gap, BR3]
+    _n_left = max(len(_names_1550), len(_names_1310), 1)
+    _col_spec = [2] * _n_left + ([0.4, 2] if _names_br3 else [])
+
+    # Row 1 — 1550 systems (left) + BR3 (right)
+    _r1 = st.columns(_col_spec)
+    for _i, _n in enumerate(_names_1550):
+        _qty_input(_r1[_i], _n)
+    if _names_br3:
+        _qty_input(_r1[-1], _names_br3[0])
+
+    # Row 2 — 1310 systems (left), BR3 column left empty
+    if _names_1310:
+        _r2 = st.columns(_col_spec)
+        for _i, _n in enumerate(_names_1310):
+            _qty_input(_r2[_i], _n)
+
+    # Any other BOM files
+    if _names_other:
+        _ro = st.columns(min(3, len(_names_other)))
+        for _col, _n in zip(_ro, _names_other):
+            _qty_input(_col, _n)
 else:
     qty_map = {}
 
 st.markdown("---")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
+_logo_bytes = None
 if LOGO_PATH.exists():
+    try:
+        _logo_bytes = LOGO_PATH.read_bytes()
+    except Exception:
+        pass
+
+if _logo_bytes:
     logo_col, title_col = st.columns([1, 3])
     with logo_col:
-        st.image(str(LOGO_PATH), width=180)
+        st.image(_logo_bytes, width=180)
     with title_col:
         st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
         st.caption("Component Procurement Analysis")
@@ -393,6 +419,9 @@ else:
     st.title("📦 BOM & Inventory Procurement Dashboard")
     st.caption("HEQA — Component Procurement Analysis")
 
+st.markdown("---")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 # Load errors
 if load_errors:
     with st.expander(f"⚠️ {len(load_errors)} file load error(s) — click to expand", expanded=True):
@@ -433,6 +462,13 @@ if calc_clicked:
                 combined_inv = inventory_df
 
             results = calculate_results(required_df, combined_inv, prices_df, types_df)
+            # Merge MFR Name 2 and MFR P/N 2 from inventory into results
+            _mfr2_cols = [c for c in ["שם יצרן נוסף", "MFR P/N 2"] if c in inventory_df.columns]
+            if _mfr2_cols and not inventory_df.empty:
+                _mfr2_df = inventory_df[[INV_KEY_COL] + _mfr2_cols].drop_duplicates(subset=INV_KEY_COL)
+                results = results.merge(_mfr2_df, left_on=BOM_VPN_COL, right_on=INV_KEY_COL, how="left")
+                if INV_KEY_COL in results.columns and INV_KEY_COL != BOM_VPN_COL:
+                    results = results.drop(columns=[INV_KEY_COL])
             st.session_state[SS_RESULTS] = results
 
 results: pd.DataFrame | None = st.session_state.get(SS_RESULTS)
@@ -534,19 +570,29 @@ if sel_status != "All":
 if search:
     s = search.lower()
     mask = pd.Series([False] * len(df_show), index=df_show.index)
-    for col in [BOM_VPN_COL, "Description", "Manufacturer"]:
+    for col in ["Heqa P.N", "Description", "MFR Name"]:
         if col in df_show.columns:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
 
-st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+_cap_col, _cost_col1, _cost_col2 = st.columns([3, 2, 2])
+with _cap_col:
+    st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+with _cost_col1:
+    if COL_ORDER_COST in df_show.columns:
+        _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
+        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.0f}")
+with _cost_col2:
+    if COL_TOTAL_COST in df_show.columns:
+        _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
+        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.0f}")
 
-# Sort by Manufacturer
-if "Manufacturer" in df_show.columns:
-    df_show = df_show.sort_values("Manufacturer", ascending=True, na_position="last").reset_index(drop=True)
+# Sort by MFR Name
+if "MFR Name" in df_show.columns:
+    df_show = df_show.sort_values("MFR Name", ascending=True, na_position="last").reset_index(drop=True)
 
-# Rename VPN column for display
-df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N"})
+# Rename VPN column and Manufacturer for display
+df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N", "Manufacturer": "MFR Name"})
 
 _table_height = max(200, len(df_show) * 35 + 50)
 
@@ -568,18 +614,36 @@ def _status_emoji(row: pd.Series) -> str:
 
 df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
 
+# ── Reorder columns: MFR Name 2 + MPN 2 right after MPN ──────────────────────
+_col_order = [
+    "●", "Heqa P.N", "Description", "MFR Name",
+    "Manufacturer Part Number",
+    "שם יצרן נוסף", "MFR P/N 2",
+    "Type",
+    COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
+    COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
+    COL_STATUS, "Product Breakdown",
+    "Order Status", "PO #", "Due Date", "Qty Ordered",
+]
+_ordered = [c for c in _col_order if c in df_show.columns]
+_extra   = [c for c in df_show.columns if c not in _col_order]
+df_show  = df_show[_ordered + _extra]
+
 # ── Column config ──────────────────────────────────────────────────────────────
 _view_col_cfg = {
     "●":            st.column_config.TextColumn("●", width="small"),
     "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
     "Description":  st.column_config.TextColumn("Description"),
-    "Manufacturer": st.column_config.TextColumn("Manufacturer"),
+    "MFR Name":     st.column_config.TextColumn("MFR Name"),
     "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
+    "שם יצרן נוסף": st.column_config.TextColumn("MFR Name 2"),
+    "MFR P/N 2":    st.column_config.TextColumn("MPN 2"),
     "Type":         st.column_config.TextColumn("Type", width="small"),
     COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
     COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
     COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
     COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.2f"),
+    COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.0f"),
     COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
     COL_STATUS:     st.column_config.TextColumn("Status"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
@@ -708,7 +772,7 @@ else:
 if not _p_vpns:
     st.info("No P-type assemblies found in the current results.")
 else:
-    _dd_col1, _dd_col2 = st.columns([3, 1])
+    _dd_col1, _dd_col2, _dd_col3 = st.columns([3, 3, 1])
     with _dd_col1:
         _sel_assy = st.selectbox(
             "Assembly (P-type)",
@@ -716,6 +780,25 @@ else:
             key="assembly_drilldown_select",
         )
     with _dd_col2:
+        if not _sel_assy.startswith("—"):
+            # Look up description from results or BOM files
+            _assy_desc = ""
+            if "Description" in results.columns:
+                _desc_match = results.loc[
+                    results[BOM_VPN_COL].astype(str).str.strip() == _sel_assy, "Description"
+                ]
+                if not _desc_match.empty:
+                    _assy_desc = str(_desc_match.iloc[0])
+            if not _assy_desc:
+                for _bf in bom_files.values():
+                    if BOM_VPN_COL in _bf.columns and BOM_DESC_COL in _bf.columns:
+                        _m = _bf.loc[_bf[BOM_VPN_COL].astype(str).str.strip() == _sel_assy, BOM_DESC_COL]
+                        if not _m.empty:
+                            _assy_desc = str(_m.iloc[0])
+                            break
+            if _assy_desc:
+                st.markdown(f"**Description:** {_assy_desc}")
+    with _dd_col3:
         _direct_only = st.checkbox("Direct children only", value=False,
                                    help="Show only the first level of children (depth = 1).\n"
                                         "Uncheck to see all descendants at every level.")
