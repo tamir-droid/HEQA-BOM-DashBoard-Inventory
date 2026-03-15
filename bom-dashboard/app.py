@@ -454,6 +454,13 @@ if calc_clicked:
                 combined_inv = inventory_df
 
             results = calculate_results(required_df, combined_inv, prices_df, types_df)
+            # Merge MFR Name 2 and MFR P/N 2 from inventory into results
+            _mfr2_cols = [c for c in ["שם יצרן נוסף", "MFR P/N 2"] if c in inventory_df.columns]
+            if _mfr2_cols and not inventory_df.empty:
+                _mfr2_df = inventory_df[[INV_KEY_COL] + _mfr2_cols].drop_duplicates(subset=INV_KEY_COL)
+                results = results.merge(_mfr2_df, left_on=BOM_VPN_COL, right_on=INV_KEY_COL, how="left")
+                if INV_KEY_COL in results.columns and INV_KEY_COL != BOM_VPN_COL:
+                    results = results.drop(columns=[INV_KEY_COL])
             st.session_state[SS_RESULTS] = results
 
 results: pd.DataFrame | None = st.session_state.get(SS_RESULTS)
@@ -606,6 +613,8 @@ _view_col_cfg = {
     "Description":  st.column_config.TextColumn("Description"),
     "Manufacturer": st.column_config.TextColumn("Manufacturer"),
     "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
+    "שם יצרן נוסף": st.column_config.TextColumn("MFR Name 2"),
+    "MFR P/N 2":    st.column_config.TextColumn("MFR P/N 2"),
     "Type":         st.column_config.TextColumn("Type", width="small"),
     COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
     COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
