@@ -275,10 +275,14 @@ with tab_edit:
     edit_df.insert(0, "Delete", False)
 
     col_cfg: dict = {
-        "Delete":    st.column_config.CheckboxColumn("🗑️", help="Check row(s) to delete"),
-        INV_KEY_COL: st.column_config.TextColumn("Heqa P.N", disabled=True),
-        INV_QTY_COL: st.column_config.NumberColumn("Qty", min_value=0, step=1),
-        "Type":      st.column_config.TextColumn("Type", disabled=True, width="small"),
+        "Delete":           st.column_config.CheckboxColumn("🗑️", help="Check row(s) to delete"),
+        INV_KEY_COL:        st.column_config.TextColumn("Heqa P.N", disabled=True),
+        INV_QTY_COL:        st.column_config.NumberColumn("Qty", min_value=0, step=1),
+        "Type":             st.column_config.TextColumn("Type", disabled=True, width="small"),
+        "MFR":              st.column_config.TextColumn("MFR Name"),
+        "MFR P/N for reference": st.column_config.TextColumn("MFR P/N"),
+        "שם יצרן נוסף":    st.column_config.TextColumn("MFR Name 2"),
+        "MFR P/N 2":        st.column_config.TextColumn("MFR P/N 2"),
     }
     for col in edit_df.columns:
         if col not in col_cfg:
@@ -360,9 +364,11 @@ with tab_edit:
 with tab_add:
     st.markdown("Fill in the details for a new part and click **Add Part**.")
 
-    _INV_DESC_COL = "תיאור"
-    _INV_MFR_COL  = "MFR"
-    _INV_MPN_COL  = "MFR P/N for reference"
+    _INV_DESC_COL  = "תיאור"
+    _INV_MFR_COL   = "MFR"
+    _INV_MPN_COL   = "MFR P/N for reference"
+    _INV_MFR2_COL  = "שם יצרן נוסף"
+    _INV_MPN2_COL  = "MFR P/N 2"
 
     with st.form("add_sys_part_form", clear_on_submit=True):
         fa1, fa2, fa3 = st.columns([2, 4, 2])
@@ -379,6 +385,12 @@ with tab_add:
         with fb2:
             new_mpn = st.text_input("MFR P/N", placeholder="e.g. 10M50DAF484I7G")
 
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            new_mfr2 = st.text_input("MFR Name 2", placeholder="second manufacturer (optional)")
+        with fc2:
+            new_mpn2 = st.text_input("MFR P/N 2", placeholder="second MFR part number (optional)")
+
         add_btn = st.form_submit_button("➕ Add Part", use_container_width=True)
 
     if add_btn:
@@ -388,6 +400,10 @@ with tab_add:
         elif pn in inv_df[INV_KEY_COL].values:
             st.error(f"❌ `{pn}` already exists — edit its quantity in the **Edit / Delete** tab.")
         else:
+            # Ensure MFR P/N 2 column exists in dataframe
+            if _INV_MPN2_COL not in inv_df.columns:
+                inv_df[_INV_MPN2_COL] = ""
+                st.session_state[SS_SYS_INV] = inv_df
             new_row: dict = {col: "" for col in inv_df.columns}
             new_row[INV_KEY_COL] = pn
             new_row[INV_QTY_COL] = int(new_qty)
@@ -397,6 +413,9 @@ with tab_add:
                 new_row[_INV_MFR_COL] = new_mfr.strip()
             if _INV_MPN_COL in inv_df.columns:
                 new_row[_INV_MPN_COL] = new_mpn.strip()
+            if _INV_MFR2_COL in inv_df.columns:
+                new_row[_INV_MFR2_COL] = new_mfr2.strip()
+            new_row[_INV_MPN2_COL] = new_mpn2.strip()
             new_inv = pd.concat([inv_df, pd.DataFrame([new_row])], ignore_index=True)
             err = _save_to_disk(new_inv.drop(columns=["Type"], errors="ignore"))
             if err:
