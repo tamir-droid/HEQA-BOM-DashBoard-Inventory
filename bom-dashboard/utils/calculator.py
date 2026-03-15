@@ -29,9 +29,13 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
 
     For each BOM file with qty > 0:  part_required += bom_qty * production_qty
 
+    If the same VPN appears twice in a BOM file, the second row is treated as
+    an alternative manufacturer (MFR Name 2 / MPN 2).
+
     Returns a DataFrame with one row per unique Vendor Part Number.
     """
     parts = []
+    second_mfr_parts = []
 
     for bom_name, df in bom_dfs.items():
         prod_qty = int(qty_map.get(bom_name, 0))
@@ -47,7 +51,15 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
             temp[BOM_VPN_COL].notna()
             & (temp[BOM_VPN_COL] != "")
             & (temp[BOM_VPN_COL].str.lower() != "nan")
-        ]
+        ].reset_index(drop=True)
+
+        # Extract second-occurrence rows as alternative manufacturer data
+        if BOM_MFR_COL in temp.columns and BOM_MPN_COL in temp.columns:
+            temp["_rank"] = temp.groupby(BOM_VPN_COL).cumcount()
+            second = temp[temp["_rank"] == 1][[BOM_VPN_COL, BOM_MFR_COL, BOM_MPN_COL]].copy()
+            if not second.empty:
+                second_mfr_parts.append(second)
+            temp = temp[temp["_rank"] == 0].drop(columns=["_rank"])
 
         temp[COL_REQUIRED] = temp[BOM_QTY_COL] * prod_qty
         label = bom_name.replace(".xlsx", "")
@@ -74,6 +86,15 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
     for col in [BOM_DESC_COL, BOM_MFR_COL, BOM_MPN_COL]:
         if col not in grouped.columns:
             grouped[col] = ""
+
+    # Merge alternative manufacturer data (second BOM row per VPN)
+    if second_mfr_parts:
+        second_mfr_df = (
+            pd.concat(second_mfr_parts, ignore_index=True)
+            .rename(columns={BOM_MFR_COL: "MFR Name 2", BOM_MPN_COL: "MPN 2"})
+            .drop_duplicates(subset=BOM_VPN_COL)
+        )
+        grouped = grouped.merge(second_mfr_df, on=BOM_VPN_COL, how="left")
 
     return grouped
 
