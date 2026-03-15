@@ -562,7 +562,7 @@ if sel_status != "All":
 if search:
     s = search.lower()
     mask = pd.Series([False] * len(df_show), index=df_show.index)
-    for col in [BOM_VPN_COL, "Description", "Manufacturer"]:
+    for col in ["Heqa P.N", "Description", "MFR Name"]:
         if col in df_show.columns:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
@@ -579,12 +579,12 @@ with _cost_col2:
         _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
         st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.0f}")
 
-# Sort by Manufacturer
-if "Manufacturer" in df_show.columns:
-    df_show = df_show.sort_values("Manufacturer", ascending=True, na_position="last").reset_index(drop=True)
+# Sort by MFR Name
+if "MFR Name" in df_show.columns:
+    df_show = df_show.sort_values("MFR Name", ascending=True, na_position="last").reset_index(drop=True)
 
-# Rename VPN column for display
-df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N"})
+# Rename VPN column and Manufacturer for display
+df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N", "Manufacturer": "MFR Name"})
 
 _table_height = max(200, len(df_show) * 35 + 50)
 
@@ -606,20 +606,36 @@ def _status_emoji(row: pd.Series) -> str:
 
 df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
 
+# ── Reorder columns: MFR Name 2 + MPN 2 right after MPN ──────────────────────
+_col_order = [
+    "●", "Heqa P.N", "Description", "MFR Name",
+    "Manufacturer Part Number",
+    "שם יצרן נוסף", "MFR P/N 2",
+    "Type",
+    COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
+    COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
+    COL_STATUS, "Product Breakdown",
+    "Order Status", "PO #", "Due Date", "Qty Ordered",
+]
+_ordered = [c for c in _col_order if c in df_show.columns]
+_extra   = [c for c in df_show.columns if c not in _col_order]
+df_show  = df_show[_ordered + _extra]
+
 # ── Column config ──────────────────────────────────────────────────────────────
 _view_col_cfg = {
     "●":            st.column_config.TextColumn("●", width="small"),
     "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
     "Description":  st.column_config.TextColumn("Description"),
-    "Manufacturer": st.column_config.TextColumn("Manufacturer"),
+    "MFR Name":     st.column_config.TextColumn("MFR Name"),
     "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
     "שם יצרן נוסף": st.column_config.TextColumn("MFR Name 2"),
-    "MFR P/N 2":    st.column_config.TextColumn("MFR P/N 2"),
+    "MFR P/N 2":    st.column_config.TextColumn("MPN 2"),
     "Type":         st.column_config.TextColumn("Type", width="small"),
     COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
     COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
     COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
     COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.2f"),
+    COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.0f"),
     COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
     COL_STATUS:     st.column_config.TextColumn("Status"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
