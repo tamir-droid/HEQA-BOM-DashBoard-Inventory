@@ -462,8 +462,8 @@ if calc_clicked:
                 combined_inv = inventory_df
 
             results = calculate_results(required_df, combined_inv, prices_df, types_df)
-            # Merge MFR Name 2 and MFR P/N 2 from inventory into results
-            _mfr2_cols = [c for c in ["שם יצרן נוסף", "MFR P/N 2"] if c in inventory_df.columns]
+            # Merge MFR Name 2 and MPN 2 from inventory into results
+            _mfr2_cols = [c for c in ["שם יצרן נוסף", "MFR P/N for reference"] if c in inventory_df.columns]
             if _mfr2_cols and not inventory_df.empty:
                 _mfr2_df = inventory_df[[INV_KEY_COL] + _mfr2_cols].drop_duplicates(subset=INV_KEY_COL)
                 results = results.merge(_mfr2_df, left_on=BOM_VPN_COL, right_on=INV_KEY_COL, how="left")
@@ -618,7 +618,7 @@ df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
 _col_order = [
     "●", "Heqa P.N", "Description", "MFR Name",
     "Manufacturer Part Number",
-    "שם יצרן נוסף", "MFR P/N 2",
+    "שם יצרן נוסף", "MFR P/N for reference",
     "Type",
     COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
     COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
@@ -637,7 +637,7 @@ _view_col_cfg = {
     "MFR Name":     st.column_config.TextColumn("MFR Name"),
     "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
     "שם יצרן נוסף": st.column_config.TextColumn("MFR Name 2"),
-    "MFR P/N 2":    st.column_config.TextColumn("MPN 2"),
+    "MFR P/N for reference": st.column_config.TextColumn("MPN 2"),
     "Type":         st.column_config.TextColumn("Type", width="small"),
     COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
     COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
