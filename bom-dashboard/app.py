@@ -338,31 +338,18 @@ with st.sidebar:
     st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
 
 
-# ── Header ────────────────────────────────────────────────────────────────────
-if LOGO_PATH.exists():
-    logo_col, title_col = st.columns([1, 3])
-    with logo_col:
-        st.image(LOGO_PATH.read_bytes(), width=180)
-    with title_col:
-        st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
-        st.caption("Component Procurement Analysis")
-else:
-    st.title("📦 BOM & Inventory Procurement Dashboard")
-    st.caption("HEQA — Component Procurement Analysis")
-
-st.markdown("---")
-
-# ── Production Quantities ─────────────────────────────────────────────────────
+# ── Production Quantities (above title) ───────────────────────────────────────
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
 
+st.markdown("""<style>
+.qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+</style>""", unsafe_allow_html=True)
+
 qty_map: dict[str, int] = {}
 if bom_files:
     st.markdown("### ⚙️ Production Quantities")
-    st.markdown("""<style>
-    .qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
-    </style>""", unsafe_allow_html=True)
 
     _bom_names = sorted(bom_files.keys())
     _names_1550  = sorted([n for n in _bom_names if "1550" in n])
@@ -410,6 +397,27 @@ if bom_files:
             _qty_input(_col, _n)
 else:
     qty_map = {}
+
+st.markdown("---")
+
+# ── Header ────────────────────────────────────────────────────────────────────
+_logo_bytes = None
+if LOGO_PATH.exists():
+    try:
+        _logo_bytes = LOGO_PATH.read_bytes()
+    except Exception:
+        pass
+
+if _logo_bytes:
+    logo_col, title_col = st.columns([1, 3])
+    with logo_col:
+        st.image(_logo_bytes, width=180)
+    with title_col:
+        st.markdown("# 📦 BOM & Inventory Procurement Dashboard")
+        st.caption("Component Procurement Analysis")
+else:
+    st.title("📦 BOM & Inventory Procurement Dashboard")
+    st.caption("HEQA — Component Procurement Analysis")
 
 st.markdown("---")
 
