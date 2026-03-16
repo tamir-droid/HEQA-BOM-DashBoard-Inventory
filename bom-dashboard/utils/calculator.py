@@ -183,6 +183,8 @@ def calculate_results(
         BOM_DESC_COL,
         BOM_MFR_COL,
         BOM_MPN_COL,
+        "MFR Name 2",
+        "MPN 2",
         "Type",
         COL_REQUIRED,
         COL_IN_STOCK,
