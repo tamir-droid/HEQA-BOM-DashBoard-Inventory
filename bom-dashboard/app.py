@@ -564,7 +564,7 @@ if sel_status != "All":
 if search:
     s = search.lower()
     mask = pd.Series([False] * len(df_show), index=df_show.index)
-    for col in ["Heqa P.N", "Description", "MFR Name"]:
+    for col in [BOM_VPN_COL, "Description", BOM_MFR_COL, "Heqa P.N", "MFR Name"]:
         if col in df_show.columns:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
