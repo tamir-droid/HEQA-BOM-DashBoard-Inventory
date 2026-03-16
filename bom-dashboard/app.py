@@ -705,6 +705,8 @@ if st.session_state.pop("_do_save_main", False):
 
     st.session_state[SS_FOLLOWUP] = _fup
     save_followup(DATA_DIR, _fup)
+    # Clear data_editor widget state so it reloads fresh from disk
+    st.session_state.pop("main_table", None)
     st.success("✅ Saved!")
     st.rerun()
 
@@ -1010,6 +1012,8 @@ with st.expander(label, expanded=False):
                     _fup[vpn]["qty_ordered"] = qty_ord_val
                 st.session_state[SS_FOLLOWUP] = _fup
                 save_followup(DATA_DIR, _fup)
+                # Clear data_editor widget state so it reloads fresh from disk
+                st.session_state.pop("followup_table", None)
                 st.success("✅ Saved!")
                 st.rerun()
         with del_col:
