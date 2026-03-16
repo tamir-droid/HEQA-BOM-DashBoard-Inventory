@@ -524,7 +524,8 @@ df_show["PO #"] = df_show[BOM_VPN_COL].map(
 )
 def _parse_date(s):
     try:
-        return datetime.date.fromisoformat(s) if s else None
+        # Handle "2024-06-15" and "2024-06-15T00:00:00" (Timestamp isoformat)
+        return datetime.date.fromisoformat(str(s)[:10]) if s else None
     except (ValueError, TypeError):
         return None
 
@@ -1000,7 +1001,7 @@ with st.expander(label, expanded=False):
                         continue
                     po = str(row.get("PO #", "") or "").strip()
                     _due_raw = row.get("Due Date")
-                    due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+                    due = str(_due_raw)[:10] if pd.notna(_due_raw) and _due_raw else ""
                     qty_ord = row.get("Qty Ordered")
                     qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
                     _fup[vpn]["po"] = po
