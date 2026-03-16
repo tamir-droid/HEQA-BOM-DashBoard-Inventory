@@ -281,8 +281,8 @@ def _do_refresh():
 if SS_DATA not in st.session_state:
     st.session_state[SS_DATA] = _load_all_local()
 
-if SS_FOLLOWUP not in st.session_state:
-    st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
+# Always reload followup from disk so all users see latest PO changes immediately
+st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
 
 if SS_SITE_INV not in st.session_state:
     st.session_state[SS_SITE_INV] = load_site_inventory(DATA_DIR)
