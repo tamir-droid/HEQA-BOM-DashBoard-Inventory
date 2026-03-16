@@ -684,6 +684,7 @@ with _save_col:
 
             was_tracked = vpn in _fup
             manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
+            existing = _fup.get(vpn, {})
             if po or due or qty_ord_val:
                 if vpn not in _fup:
                     _fup[vpn] = {
@@ -693,7 +694,8 @@ with _save_col:
                         "manually_marked": False,
                     }
                 _fup[vpn]["po"] = po
-                _fup[vpn]["due_date"] = due
+                # Preserve existing due_date if user didn't change it (came back empty)
+                _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
                 _fup[vpn]["qty_ordered"] = qty_ord_val
             elif was_tracked and not manually_marked:
                 del _fup[vpn]
