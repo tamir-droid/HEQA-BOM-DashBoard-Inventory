@@ -1,0 +1,15 @@
+[Unit]
+Description=HEQA BOM & Inventory Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_LINUX_USER
+WorkingDirectory=/home/YOUR_LINUX_USER/heqa-bom/bom-dashboard
+ExecStart=/usr/bin/python3 -m streamlit run app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -54,11 +54,24 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
         ].reset_index(drop=True)
 
         # Extract second-occurrence rows as alternative manufacturer data
+        # Only keep if MFR Name or MPN is different from the first row
         if BOM_MFR_COL in temp.columns and BOM_MPN_COL in temp.columns:
             temp["_rank"] = temp.groupby(BOM_VPN_COL).cumcount()
+            first  = temp[temp["_rank"] == 0][[BOM_VPN_COL, BOM_MFR_COL, BOM_MPN_COL]].copy()
             second = temp[temp["_rank"] == 1][[BOM_VPN_COL, BOM_MFR_COL, BOM_MPN_COL]].copy()
             if not second.empty:
-                second_mfr_parts.append(second)
+                # Only include rows where manufacturer OR MPN differs from first row
+                merged_check = second.merge(
+                    first.rename(columns={BOM_MFR_COL: "_mfr1", BOM_MPN_COL: "_mpn1"}),
+                    on=BOM_VPN_COL, how="left"
+                )
+                is_different = (
+                    (merged_check[BOM_MFR_COL].str.strip() != merged_check["_mfr1"].str.strip()) |
+                    (merged_check[BOM_MPN_COL].str.strip() != merged_check["_mpn1"].str.strip())
+                )
+                second = second[is_different.values]
+                if not second.empty:
+                    second_mfr_parts.append(second)
             temp = temp[temp["_rank"] == 0].drop(columns=["_rank"])
 
         temp[COL_REQUIRED] = temp[BOM_QTY_COL] * prod_qty
@@ -183,6 +196,8 @@ def calculate_results(
         BOM_DESC_COL,
         BOM_MFR_COL,
         BOM_MPN_COL,
+        "MFR Name 2",
+        "MPN 2",
         "Type",
         COL_REQUIRED,
         COL_IN_STOCK,
