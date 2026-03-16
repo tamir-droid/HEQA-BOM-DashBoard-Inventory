@@ -1002,7 +1002,8 @@ with st.expander(label, expanded=False):
                     qty_ord = row.get("Qty Ordered")
                     qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
                     _fup[vpn]["po"] = po
-                    _fup[vpn]["due_date"] = due
+                    # Preserve existing due_date if user didn't change it (came back empty)
+                    _fup[vpn]["due_date"] = due if due else _fup[vpn].get("due_date", "")
                     _fup[vpn]["qty_ordered"] = qty_ord_val
                 st.session_state[SS_FOLLOWUP] = _fup
                 save_followup(DATA_DIR, _fup)
