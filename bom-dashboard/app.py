@@ -620,8 +620,8 @@ _col_order = [
     "Type",
     COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
     COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
-    COL_STATUS, "Product Breakdown",
-    "Order Status", "PO #", "Due Date", "Qty Ordered",
+    "PO #", "Due Date", "Qty Ordered",
+    COL_STATUS, "Product Breakdown", "Order Status",
 ]
 _ordered = [c for c in _col_order if c in df_show.columns]
 _extra   = [c for c in df_show.columns if c not in _col_order]
