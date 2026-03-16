@@ -569,7 +569,7 @@ if search:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
 
-_cap_col, _cost_col1, _cost_col2 = st.columns([3, 2, 2])
+_cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
 with _cap_col:
     st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
 with _cost_col1:
@@ -580,6 +580,10 @@ with _cost_col2:
     if COL_TOTAL_COST in df_show.columns:
         _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
         st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.0f}")
+with _save_btn_col:
+    st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
+    if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
+        st.session_state["_do_save_main"] = True
 
 # Sort by MFR Name
 if "MFR Name" in df_show.columns:
@@ -669,41 +673,39 @@ edited_df = st.data_editor(
     key="main_table",
 )
 
-_save_col, _ = st.columns([1, 5])
-with _save_col:
-    if st.button("💾 Save Changes", use_container_width=True):
-        _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
+if st.session_state.pop("_do_save_main", False):
+    _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
 
-        for _, row in edited_df.iterrows():
-            vpn = str(row.get("Heqa P.N", ""))
-            po = str(row.get("PO #", "") or "").strip()
-            _due_raw = row.get("Due Date")
-            due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
-            qty_ord = row.get("Qty Ordered")
-            qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+    for _, row in edited_df.iterrows():
+        vpn = str(row.get("Heqa P.N", ""))
+        po = str(row.get("PO #", "") or "").strip()
+        _due_raw = row.get("Due Date")
+        due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+        qty_ord = row.get("Qty Ordered")
+        qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
 
-            was_tracked = vpn in _fup
-            manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
-            existing = _fup.get(vpn, {})
-            if po or due or qty_ord_val:
-                if vpn not in _fup:
-                    _fup[vpn] = {
-                        "date": datetime.date.today().isoformat(),
-                        "user": st.session_state.get(SS_CURRENT_USER, ""),
-                        "notes": "",
-                        "manually_marked": False,
-                    }
-                _fup[vpn]["po"] = po
-                # Preserve existing due_date if user didn't change it (came back empty)
-                _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
-                _fup[vpn]["qty_ordered"] = qty_ord_val
-            elif was_tracked and not manually_marked:
-                del _fup[vpn]
+        was_tracked = vpn in _fup
+        manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
+        existing = _fup.get(vpn, {})
+        if po or due or qty_ord_val:
+            if vpn not in _fup:
+                _fup[vpn] = {
+                    "date": datetime.date.today().isoformat(),
+                    "user": st.session_state.get(SS_CURRENT_USER, ""),
+                    "notes": "",
+                    "manually_marked": False,
+                }
+            _fup[vpn]["po"] = po
+            # Preserve existing due_date if user didn't change it (came back empty)
+            _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
+            _fup[vpn]["qty_ordered"] = qty_ord_val
+        elif was_tracked and not manually_marked:
+            del _fup[vpn]
 
-        st.session_state[SS_FOLLOWUP] = _fup
-        save_followup(DATA_DIR, _fup)
-        st.success("✅ Saved!")
-        st.rerun()
+    st.session_state[SS_FOLLOWUP] = _fup
+    save_followup(DATA_DIR, _fup)
+    st.success("✅ Saved!")
+    st.rerun()
 
 # ── Exports ───────────────────────────────────────────────────────────────────
 st.markdown("### 📥 Export")
