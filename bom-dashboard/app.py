@@ -511,6 +511,8 @@ with fc2:
 with fc3:
     search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
 
+_brd_only = st.checkbox("🔲 BRD sub-components only", value=False)
+
 # Apply filters
 df_show = results.copy()
 
@@ -569,6 +571,9 @@ if search:
         if col in df_show.columns:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
+
+if _brd_only and "Under BRD" in df_show.columns:
+    df_show = df_show[df_show["Under BRD"] == True]
 
 _cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
 with _cap_col:
