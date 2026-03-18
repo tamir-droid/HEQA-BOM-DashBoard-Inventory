@@ -213,6 +213,7 @@ def calculate_results(
         COL_ORDER_COST,
         COL_STATUS,
         COL_BREAKDOWN,
+        "Under BRD",
     ]
     existing = [c for c in ordered_cols if c in df.columns]
     return df[existing].reset_index(drop=True)
