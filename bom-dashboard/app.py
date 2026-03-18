@@ -681,7 +681,14 @@ if st.session_state.pop("_do_save_main", False):
         vpn = str(row.get("Heqa P.N", ""))
         po = str(row.get("PO #", "") or "").strip()
         _due_raw = row.get("Due Date")
-        due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+        due = ""
+        try:
+            if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                _d = str(_due_raw)[:10]
+                datetime.date.fromisoformat(_d)   # validate
+                due = _d
+        except (ValueError, TypeError):
+            due = ""
         qty_ord = row.get("Qty Ordered")
         qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
 
@@ -1003,7 +1010,14 @@ with st.expander(label, expanded=False):
                         continue
                     po = str(row.get("PO #", "") or "").strip()
                     _due_raw = row.get("Due Date")
-                    due = str(_due_raw)[:10] if pd.notna(_due_raw) and _due_raw else ""
+                    due = ""
+                    try:
+                        if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                            _d = str(_due_raw)[:10]
+                            datetime.date.fromisoformat(_d)
+                            due = _d
+                    except (ValueError, TypeError):
+                        due = ""
                     qty_ord = row.get("Qty Ordered")
                     qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
                     _fup[vpn]["po"] = po
