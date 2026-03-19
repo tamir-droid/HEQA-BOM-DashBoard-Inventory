@@ -522,9 +522,15 @@ df_show = results.copy()
 
 # ── Inject Order Status, PO #, Due Date, Qty Ordered from followup ────────────
 _followup = st.session_state.get(SS_FOLLOWUP, {})
-df_show["Order Status"] = df_show[BOM_VPN_COL].map(
-    lambda v: "🔵 Ordered" if v in _followup else "—"
-)
+def _order_status(v):
+    if v not in _followup:
+        return "—"
+    po = str(_followup[v].get("po", "")).strip().upper()
+    if po == "NA":
+        return "⬜ Ignored"
+    return "🔵 Ordered"
+
+df_show["Order Status"] = df_show[BOM_VPN_COL].map(_order_status)
 df_show["PO #"] = df_show[BOM_VPN_COL].map(
     lambda v: _followup[v].get("po", "") if v in _followup else ""
 )
@@ -546,6 +552,14 @@ df_show["Qty Ordered"] = pd.to_numeric(
 # Override Type to BULK for parts whose VPN starts with a known BULK prefix
 _bulk_mask = df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
 df_show.loc[_bulk_mask, "Type"] = "BULK"
+
+# ── NA logic: if PO # == "NA", zero out Order Cost and To Order ───────────────
+_na_mask = df_show["PO #"].str.strip().str.upper() == "NA"
+if _na_mask.any():
+    if COL_ORDER_COST in df_show.columns:
+        df_show.loc[_na_mask, COL_ORDER_COST] = 0
+    if COL_TO_ORDER in df_show.columns:
+        df_show.loc[_na_mask, COL_TO_ORDER] = 0
 
 if sel_type != "All" and "Type" in df_show.columns:
     df_show = df_show[df_show["Type"] == sel_type]
@@ -612,6 +626,8 @@ def _status_emoji(row: pd.Series) -> str:
     po = str(row.get("PO #", "")).strip().lower()
     if po == "ignore":
         return "⬜"
+    if po == "na":
+        return "🚫"  # NA = excluded from order cost, shown grey with "Ignored"
     is_ordered = row.get("Order Status", "—") == "🔵 Ordered"
     status = str(row.get(COL_STATUS, ""))
     if is_ordered and "Missing" in status:
@@ -658,7 +674,7 @@ _view_col_cfg = {
     COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
     COL_STATUS:     st.column_config.TextColumn("Status"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
-    "PO #":         st.column_config.TextColumn("PO #", help="Type 'Ignore' to exclude from calculations."),
+    "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost. Type 'Ignore' to mark as ignored."),
     "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
     "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
 }
