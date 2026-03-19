@@ -344,11 +344,11 @@ with st.sidebar:
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
 
-# ── Production Kits (shown first, above quantities) ───────────────────────────
+# ── Kits Order (shown first, above quantities) ───────────────────────────
 _kits = load_kits(DATA_DIR)
 _kit_names = list(_kits.keys())
 
-st.markdown("### 📦 Production Kits")
+st.markdown("### 📦 Kits Order")
 
 # Single row: [multiselect] [kit name input] [Save] [Load] [Rename input] [Rename] [Delete]
 _kc1, _kc2, _kc3, _kc4, _kc5, _kc6, _kc7 = st.columns([3, 2, 1.5, 1.5, 2, 1.5, 1.5])
