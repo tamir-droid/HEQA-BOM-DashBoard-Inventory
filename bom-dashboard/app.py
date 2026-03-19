@@ -339,7 +339,7 @@ with st.sidebar:
     st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
 
 
-# ── Production Quantities (above title) ───────────────────────────────────────
+# ── Systems Quantity (above title) ───────────────────────────────────────
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
@@ -426,7 +426,7 @@ st.markdown("""<style>
 
 qty_map: dict[str, int] = {}
 if bom_files:
-    st.markdown("### ⚙️ Production Quantities")
+    st.markdown("### ⚙️ Systems Quantity")
 
     _bom_names = sorted(bom_files.keys())
     _names_1550  = sorted([n for n in _bom_names if "1550" in n])
@@ -545,7 +545,7 @@ if calc_clicked:
 results: pd.DataFrame | None = st.session_state.get(SS_RESULTS)
 
 if results is None:
-    st.info("Set production quantities in the sidebar and press **Calculate** to see results.")
+    st.info("Set systems quantity in the sidebar and press **Calculate** to see results.")
     st.stop()
 
 if results.empty:
