@@ -349,39 +349,36 @@ _kits = load_kits(DATA_DIR)
 _kit_names = list(_kits.keys())
 
 st.markdown("### 📦 Production Kits")
-_pk1, _pk2, _pk3 = st.columns([4, 2, 2])
 
-with _pk1:
+# Single row: [multiselect] [kit name input] [Save] [Load] [Rename input] [Rename] [Delete]
+_kc1, _kc2, _kc3, _kc4, _kc5, _kc6, _kc7 = st.columns([3, 2, 1.5, 1.5, 2, 1.5, 1.5])
+
+with _kc1:
     _checked_kits = st.multiselect(
-        "Select kits to load (quantities will be summed)",
-        options=_kit_names,
-        placeholder="Choose one or more kits…",
+        "Kits", options=_kit_names,
+        placeholder="Select kit(s)…",
         label_visibility="collapsed",
     )
 
-with _pk2:
-    _new_kit_name = st.text_input("New kit name", placeholder="Kit name…",
+with _kc2:
+    _new_kit_name = st.text_input("Kit name", placeholder="New kit name…",
                                    label_visibility="collapsed")
 
-with _pk3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("💾 Save current as Kit", use_container_width=True):
+with _kc3:
+    if st.button("💾 Save", use_container_width=True):
         _name = _new_kit_name.strip()
         if not _name:
-            st.warning("Enter a kit name.")
+            st.warning("Enter a name.")
         else:
             _kits[_name] = dict(st.session_state.get("_qty_persist", {}))
             save_kits(DATA_DIR, _kits)
-            st.success(f"✅ Saved kit '{_name}'")
+            st.success(f"✅ Saved '{_name}'")
             st.rerun()
 
-# Load / Rename / Delete row
-_pa1, _pa2, _pa3, _pa4, _pa5 = st.columns([2, 3, 2, 2, 1])
-
-with _pa1:
-    if st.button("⬆️ Load Selected", use_container_width=True):
+with _kc4:
+    if st.button("⬆️ Load", use_container_width=True):
         if not _checked_kits:
-            st.warning("Select at least one kit.")
+            st.warning("Select a kit.")
         else:
             _combined: dict[str, int] = {}
             for _kn in _checked_kits:
@@ -393,19 +390,18 @@ with _pa1:
             st.success(f"✅ Loaded: {', '.join(_checked_kits)}")
             st.rerun()
 
-with _pa2:
-    _ren_disabled = len(_checked_kits) != 1
+_ren_disabled = len(_checked_kits) != 1
+with _kc5:
     _ren_val = st.text_input(
         "Rename to",
         value=_checked_kits[0] if not _ren_disabled else "",
-        placeholder="Select exactly 1 kit to rename…" if _ren_disabled else "New name…",
+        placeholder="New name…" if not _ren_disabled else "Select 1 kit…",
         disabled=_ren_disabled,
         label_visibility="collapsed",
         key="rename_kit_input",
     )
 
-with _pa3:
-    st.markdown("<br>", unsafe_allow_html=True)
+with _kc6:
     if st.button("✏️ Rename", use_container_width=True, disabled=_ren_disabled):
         _new_rn = _ren_val.strip()
         if _new_rn and _new_rn != _checked_kits[0]:
@@ -414,14 +410,12 @@ with _pa3:
             st.success(f"✅ Renamed to '{_new_rn}'")
             st.rerun()
 
-with _pa4:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🗑️ Delete Selected", use_container_width=True,
-                 disabled=not _checked_kits):
+with _kc7:
+    if st.button("🗑️ Delete", use_container_width=True, disabled=not _checked_kits):
         for _kn in _checked_kits:
             _kits.pop(_kn, None)
         save_kits(DATA_DIR, _kits)
-        st.success(f"🗑️ Deleted: {', '.join(_checked_kits)}")
+        st.success(f"🗑️ Deleted!")
         st.rerun()
 
 st.divider()
