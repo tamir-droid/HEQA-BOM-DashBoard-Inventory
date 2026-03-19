@@ -37,6 +37,7 @@ from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
 from utils.followup import load_followup, save_followup
+from utils.kits import load_kits, save_kits
 from utils.site_inventory import load_site_inventory
 from utils.calculator import (
     aggregate_bom,
@@ -342,6 +343,66 @@ with st.sidebar:
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
+
+# ── Production Kits ────────────────────────────────────────────────────────────
+_kits = load_kits(DATA_DIR)
+st.markdown("### 📦 Production Kits")
+_kit_col1, _kit_col2, _kit_col3, _kit_col4, _kit_col5 = st.columns([3, 1, 2, 2, 1])
+
+with _kit_col1:
+    _kit_names = list(_kits.keys())
+    _sel_kit = st.selectbox("Select Kit", ["— select —"] + _kit_names,
+                            label_visibility="collapsed")
+
+with _kit_col2:
+    if st.button("⬆️ Load", use_container_width=True):
+        if _sel_kit != "— select —" and _sel_kit in _kits:
+            for bom_name, qty in _kits[_sel_kit].items():
+                st.session_state["_qty_persist"][bom_name] = int(qty)
+                st.session_state[f"qty_{bom_name}"] = int(qty)
+            st.success(f"✅ Loaded kit: {_sel_kit}")
+            st.rerun()
+
+with _kit_col3:
+    _new_kit_name = st.text_input("Kit name", placeholder="Kit name…",
+                                   label_visibility="collapsed")
+
+with _kit_col4:
+    if st.button("💾 Save as Kit", use_container_width=True):
+        _name = _new_kit_name.strip()
+        if not _name:
+            st.warning("Enter a kit name first.")
+        else:
+            _kits[_name] = dict(st.session_state.get("_qty_persist", {}))
+            save_kits(DATA_DIR, _kits)
+            st.success(f"✅ Kit '{_name}' saved!")
+            st.rerun()
+
+with _kit_col5:
+    if st.button("🗑️", use_container_width=True, help="Delete selected kit"):
+        if _sel_kit != "— select —" and _sel_kit in _kits:
+            del _kits[_sel_kit]
+            save_kits(DATA_DIR, _kits)
+            st.success(f"🗑️ Deleted kit: {_sel_kit}")
+            st.rerun()
+
+# Rename section
+if _sel_kit != "— select —" and _sel_kit in _kits:
+    with st.expander("✏️ Rename selected kit"):
+        _ren_col1, _ren_col2 = st.columns([3, 1])
+        with _ren_col1:
+            _new_name = st.text_input("New name", value=_sel_kit, key="rename_kit_input")
+        with _ren_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Rename", use_container_width=True):
+                _new_name = _new_name.strip()
+                if _new_name and _new_name != _sel_kit:
+                    _kits[_new_name] = _kits.pop(_sel_kit)
+                    save_kits(DATA_DIR, _kits)
+                    st.success(f"✅ Renamed to '{_new_name}'")
+                    st.rerun()
+
+st.divider()
 
 st.markdown("""<style>
 .qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
