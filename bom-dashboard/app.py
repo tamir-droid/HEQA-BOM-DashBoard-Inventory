@@ -993,6 +993,9 @@ with st.expander(label, expanded=False):
 
         fo_rows = []
         for vpn, d in followup.items():
+            # Skip NA items — not shown in Already Ordered section
+            if str(d.get("po", "")).strip().upper() == "NA":
+                continue
             desc = ""
             match = results.loc[results[BOM_VPN_COL] == vpn, "Description"]
             if not match.empty:
