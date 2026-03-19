@@ -344,7 +344,7 @@ with st.sidebar:
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
 
-# ── Production Kits ────────────────────────────────────────────────────────────
+# ── Production Kits (shown first, above quantities) ───────────────────────────
 _kits = load_kits(DATA_DIR)
 _kit_names = list(_kits.keys())
 
