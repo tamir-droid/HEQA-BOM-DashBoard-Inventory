@@ -845,7 +845,7 @@ if st.session_state.pop("_do_save_main", False):
             try:
                 with pd.ExcelWriter(DATA_DIR / "Inventory.xlsx", engine="openpyxl") as _w:
                     _inv_df.to_excel(_w, sheet_name="Sheet1", index=False)
-                st.session_state[SS_SITE_INV] = _inv_df
+                st.cache_data.clear()
             except Exception as _e:
                 st.warning(f"⚠️ Could not update Inventory.xlsx: {_e}")
 
