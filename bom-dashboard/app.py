@@ -766,7 +766,7 @@ st.caption(
 )
 
 # ── Editable results table ─────────────────────────────────────────────────────
-_editable_cols = {"PO #", "Due Date", "Qty Ordered"}
+_editable_cols = {"PO #", "Due Date", "Qty Ordered", COL_IN_STOCK}
 _disabled_cols = [c for c in df_show.columns if c not in _editable_cols]
 
 edited_df = st.data_editor(
@@ -817,6 +817,34 @@ if st.session_state.pop("_do_save_main", False):
 
     st.session_state[SS_FOLLOWUP] = _fup
     save_followup(DATA_DIR, _fup)
+
+    # ── Update Inventory.xlsx for any In Stock qty changes ─────────────────
+    _inv_df = load_site_inventory(DATA_DIR)
+    if not _inv_df.empty and INV_KEY_COL in _inv_df.columns and INV_QTY_COL in _inv_df.columns:
+        _inv_updated = False
+        for _, _row in edited_df.iterrows():
+            _vpn = str(_row.get("Heqa P.N", "")).strip()
+            _new_qty = _row.get(COL_IN_STOCK)
+            if not _vpn or pd.isna(_new_qty):
+                continue
+            _orig_rows = df_show[df_show["Heqa P.N"] == _vpn][COL_IN_STOCK]
+            if _orig_rows.empty:
+                continue
+            _orig_val = float(_orig_rows.iloc[0]) if pd.notna(_orig_rows.iloc[0]) else 0.0
+            _new_val = float(_new_qty)
+            if _orig_val != _new_val:
+                _mask = _inv_df[INV_KEY_COL].astype(str).str.strip() == _vpn
+                if _mask.any():
+                    _inv_df.loc[_mask, INV_QTY_COL] = _new_val
+                    _inv_updated = True
+        if _inv_updated:
+            try:
+                with pd.ExcelWriter(DATA_DIR / "Inventory.xlsx", engine="openpyxl") as _w:
+                    _inv_df.to_excel(_w, sheet_name="Sheet1", index=False)
+                st.session_state[SS_SITE_INV] = _inv_df
+            except Exception as _e:
+                st.warning(f"⚠️ Could not update Inventory.xlsx: {_e}")
+
     # Clear data_editor widget state so it reloads fresh from disk
     st.session_state.pop("main_table", None)
     st.success("✅ Saved!")
