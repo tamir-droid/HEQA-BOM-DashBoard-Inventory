@@ -819,7 +819,11 @@ if st.session_state.pop("_do_save_main", False):
     save_followup(DATA_DIR, _fup)
 
     # ── Update Inventory.xlsx for any In Stock qty changes ─────────────────
-    _inv_df = load_site_inventory(DATA_DIR)
+    _inv_path = DATA_DIR / "Inventory.xlsx"
+    try:
+        _inv_df = pd.read_excel(_inv_path, sheet_name="Sheet1", dtype=str) if _inv_path.exists() else pd.DataFrame()
+    except Exception:
+        _inv_df = pd.DataFrame()
     if not _inv_df.empty and INV_KEY_COL in _inv_df.columns and INV_QTY_COL in _inv_df.columns:
         _inv_updated = False
         for _, _row in edited_df.iterrows():
