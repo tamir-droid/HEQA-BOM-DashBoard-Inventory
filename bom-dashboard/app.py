@@ -271,8 +271,8 @@ def _do_refresh():
 
 
 # ── Session state init ────────────────────────────────────────────────────────
-if SS_DATA not in st.session_state:
-    st.session_state[SS_DATA] = _load_all_local()
+# Always assign — @st.cache_data handles efficiency; no stale session state.
+st.session_state[SS_DATA] = _load_all_local()
 
 # Always reload followup from disk so all users see latest PO changes immediately
 st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
