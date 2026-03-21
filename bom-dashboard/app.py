@@ -225,8 +225,7 @@ if st.session_state.get(SS_MUST_CHANGE_PW):
 
 
 # ── Data loading (cached) ─────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Loading Excel files from data/ …")
-def _load_all_local() -> dict:
+def _load_all_local() -> dict:  # cache temporarily removed for debugging
     """Read every xlsx in DATA_DIR. Returns dict with bom, inventory, prices, types, errors."""
     result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
 
@@ -305,7 +304,6 @@ def _load_all_local() -> dict:
 
 
 def _do_refresh():
-    _load_all_local.clear()
     st.session_state.pop(SS_DATA, None)
     st.session_state.pop(SS_RESULTS, None)
 
@@ -537,15 +535,16 @@ else:
     qty_map = {}
 
 # ── DEBUG (temporary) ─────────────────────────────────────────────────────────
-with st.expander("🔍 Debug: file loading info", expanded=False):
-    st.write("**DATA_DIR:**", str(DATA_DIR))
-    _dbg_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
-    st.write("**Files found:**", [f.name for f in _dbg_files])
-    st.write("**BOM keys loaded:**", list(bom_files.keys()))
-    st.write("**Errors:**", load_errors)
-    from utils.combined_bom_parser import is_combined_bom_filename as _icbf
-    for _f in _dbg_files:
-        st.write(f"  `{_f.name}` → is_combined={_icbf(_f.name)}")
+_dbg_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
+_dbg_lines = [
+    f"DATA_DIR: {DATA_DIR}",
+    f"Files: {[f.name for f in _dbg_files]}",
+    f"BOM keys: {list(bom_files.keys())}",
+    f"Errors: {load_errors}",
+]
+for _f in _dbg_files:
+    _dbg_lines.append(f"  {_f.name} → is_combined={is_combined_bom_filename(_f.name)}")
+st.info("\n\n".join(_dbg_lines))
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("---")
