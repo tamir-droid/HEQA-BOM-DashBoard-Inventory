@@ -29,12 +29,12 @@ with st.sidebar:
     st.markdown("### 🗂️ Navigation")
     if st.button("🏠 Main Dashboard", use_container_width=True, key="nav_main"):
         st.switch_page("app.py")
-    if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
-        st.switch_page("pages/1_Site_Inventory.py")
-    if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
-        st.switch_page("pages/2_System_Inventory.py")
     if st.button("🔌 BRD Assembly", use_container_width=True, key="nav_brd"):
         st.switch_page("pages/4_BRD_Assembly.py")
+    if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
+        st.switch_page("pages/2_System_Inventory.py")
+    if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
+        st.switch_page("pages/1_Site_Inventory.py")
     st.button("👥 Users", use_container_width=True, disabled=True)
     st.markdown("---")
 
