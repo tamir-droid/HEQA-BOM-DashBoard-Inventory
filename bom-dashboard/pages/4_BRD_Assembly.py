@@ -188,11 +188,13 @@ if not inv_df.empty and INV_KEY_COL in inv_df.columns and INV_QTY_COL in inv_df.
 # ── Build display DataFrame ─────────────────────────────────────────────────────
 disp_cols = []
 for col in [BOM_FIND_NUM_COL, BOM_LEVEL_COL, BOM_VPN_COL, BOM_DESC_COL,
-            BOM_MFR_COL, BOM_MPN_COL, BOM_QTY_COL, "BOM File"]:
+            BOM_MFR_COL, BOM_MPN_COL, BOM_QTY_COL]:
     if col in combined.columns:
         disp_cols.append(col)
 
 disp = combined[disp_cols].copy()
+# Keep only unique P/N rows
+disp = disp.drop_duplicates(subset=[BOM_VPN_COL])
 disp = disp.rename(columns={
     BOM_FIND_NUM_COL: "Find #",
     BOM_LEVEL_COL:    "Level",
@@ -282,7 +284,6 @@ st.dataframe(
         "Qty (BOM)":   st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
         "In Stock":    st.column_config.NumberColumn("In Stock", format="%g", width="small"),
         "Status":      st.column_config.TextColumn("Status"),
-        "BOM File":    st.column_config.TextColumn("BOM File"),
     },
 )
 
