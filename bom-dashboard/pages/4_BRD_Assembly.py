@@ -343,7 +343,7 @@ if not brd_assemblies:
     st.stop()
 
 # ── Selector + BRD Qty + Description ──────────────────────────────────────────
-sel_col, qty_col_ui, desc_col = st.columns([2, 1, 4])
+sel_col, qty_col_ui, desc_col = st.columns([1.2, 0.6, 5])
 with sel_col:
     st.caption("Select BRD Assembly")
     sel_brd = st.selectbox(
