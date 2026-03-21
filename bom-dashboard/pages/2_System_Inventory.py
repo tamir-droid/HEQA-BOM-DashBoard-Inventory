@@ -45,6 +45,8 @@ with st.sidebar:
     if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
         st.switch_page("pages/1_Site_Inventory.py")
     st.button("📦 System Inventory", use_container_width=True, disabled=True)
+    if st.button("🔌 BRD Assembly", use_container_width=True, key="nav_brd"):
+        st.switch_page("pages/4_BRD_Assembly.py")
     if st.session_state.get(SS_IS_ADMIN):
         if st.button("👥 Users", use_container_width=True, key="nav_users"):
             st.switch_page("pages/3_User_Management.py")
