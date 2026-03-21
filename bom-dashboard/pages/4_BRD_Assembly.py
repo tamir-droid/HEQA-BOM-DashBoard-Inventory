@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from config import (
-    DATA_DIR, LOGO_PATH,
+    DATA_DIR, LOGO_PATH, PCBA_ICON_PATH,
     SS_AUTH, SS_IS_ADMIN, SS_CURRENT_USER, SS_FOLLOWUP,
     BOM_LEVEL_COL, BOM_VPN_COL, BOM_QTY_COL, BOM_DESC_COL,
     BOM_MFR_COL, BOM_MPN_COL, BOM_FIND_NUM_COL,
@@ -26,15 +26,21 @@ from config import (
     COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME, SUPPORT_FILES,
 )
 from utils.bom_parser import load_bom_file
-from utils.combined_bom_parser import load_combined_bom
+from utils.combined_bom_parser import load_combined_bom, is_combined_bom_filename
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
 from utils.followup import load_followup, save_followup
 
 # ── Page config ────────────────────────────────────────────────────────────────
+try:
+    from PIL import Image as _PILImage
+    _pcba_icon = _PILImage.open(PCBA_ICON_PATH) if PCBA_ICON_PATH.exists() else "🖥️"
+except Exception:
+    _pcba_icon = "🖥️"
+
 st.set_page_config(
     page_title="BRD Assembly — HEQA",
-    page_icon="🔌",
+    page_icon=_pcba_icon,
     layout="wide",
 )
 
@@ -136,15 +142,30 @@ if not st.session_state.get(SS_AUTH):
 st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
 
 # ── Header ─────────────────────────────────────────────────────────────────────
+import base64 as _b64
+
+def _pcba_title_html() -> str:
+    """Return an HTML heading with inline PCBA icon if available."""
+    if PCBA_ICON_PATH.exists():
+        _img_b64 = _b64.b64encode(PCBA_ICON_PATH.read_bytes()).decode()
+        return (
+            f'<div style="display:flex;align-items:center;gap:12px">'
+            f'<img src="data:image/png;base64,{_img_b64}" style="height:52px;width:auto">'
+            f'<span style="font-size:2rem;font-weight:700">BRD Assembly Viewer</span>'
+            f'</div>'
+        )
+    return "<h1>🖥️ BRD Assembly Viewer</h1>"
+
 if LOGO_PATH.exists():
     logo_col, title_col = st.columns([1, 3])
     with logo_col:
         st.image(LOGO_PATH.read_bytes(), width=180)
     with title_col:
-        st.markdown("# 🔌 BRD Assembly Viewer")
+        st.markdown(_pcba_title_html(), unsafe_allow_html=True)
         st.caption("Select a BRD/BRA assembly to view all sub-components as defined in the BOM hierarchy.")
 else:
-    st.title("🔌 BRD Assembly Viewer")
+    st.markdown(_pcba_title_html(), unsafe_allow_html=True)
+    st.caption("Select a BRD/BRA assembly to view all sub-components as defined in the BOM hierarchy.")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -166,25 +187,27 @@ def _parse_date(s):
 @st.cache_data(show_spinner=False)
 def _load_all_boms() -> dict[str, pd.DataFrame]:
     bom_files: dict[str, pd.DataFrame] = {}
+    combined_loaded = False
     if not DATA_DIR.exists():
         return bom_files
 
-    combined_path = DATA_DIR / COMBINED_BOM_FILENAME
-    if combined_path.exists():
-        try:
-            bom_dict, err = load_combined_bom(COMBINED_BOM_FILENAME, combined_path.read_bytes())
-            if err is None and bom_dict:
-                bom_files.update(bom_dict)
-        except Exception:
-            pass
-
-    for f in DATA_DIR.glob("*.xlsx"):
+    for f in sorted(DATA_DIR.glob("*.xlsx")):
         if f.name in SUPPORT_FILES:
             continue
         try:
-            df, err = load_bom_file(f.name, f.read_bytes())
-            if err is None and df is not None and not df.empty:
-                bom_files[f.name] = df
+            file_bytes = f.read_bytes()
+        except Exception:
+            continue
+        try:
+            if is_combined_bom_filename(f.name):
+                bom_dict, err = load_combined_bom(f.name, file_bytes)
+                if err is None and bom_dict:
+                    bom_files.update(bom_dict)
+                    combined_loaded = True
+            elif not combined_loaded:
+                df, err = load_bom_file(f.name, file_bytes)
+                if err is None and df is not None and not df.empty:
+                    bom_files[f.name] = df
         except Exception:
             continue
 

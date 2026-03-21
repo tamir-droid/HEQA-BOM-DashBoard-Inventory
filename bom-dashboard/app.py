@@ -34,7 +34,7 @@ from config import (
     INV_QTY_COL,
 )
 from utils.bom_parser import load_bom_file
-from utils.combined_bom_parser import load_combined_bom
+from utils.combined_bom_parser import load_combined_bom, is_combined_bom_filename
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -231,40 +231,42 @@ def _load_all_local() -> dict:
     result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not any(DATA_DIR.glob("*.xlsx")):
+    all_paths = sorted(DATA_DIR.glob("*.xlsx"))
+    if not all_paths:
         result["errors"].append("No data files uploaded yet — go to 📤 Upload Files to add your Excel files.")
         return result
 
-    for path in sorted(DATA_DIR.glob("*.xlsx")):
-        name = path.name
+    # ── Read all file bytes once ───────────────────────────────────────────────
+    file_map: dict[str, bytes] = {}
+    for path in all_paths:
         try:
-            file_bytes = path.read_bytes()
+            file_map[path.name] = path.read_bytes()
         except Exception as exc:
-            result["errors"].append(f"Cannot read '{name}': {exc}")
-            continue
+            result["errors"].append(f"Cannot read '{path.name}': {exc}")
 
+    # ── Pass 1: support files (inventory, prices, types) ──────────────────────
+    individual_bom_names: list[str] = []
+    for name, file_bytes in file_map.items():
         if name == INV_FILENAME:
             df, err = load_inventory(file_bytes)
-            if err:
-                result["errors"].append(err)
-            else:
-                result["inventory"] = df
+            if err: result["errors"].append(err)
+            else: result["inventory"] = df
 
         elif name == PRICE_FILENAME:
             df, err = load_prices(file_bytes)
-            if err:
-                result["errors"].append(err)
-            else:
-                result["prices"] = df
+            if err: result["errors"].append(err)
+            else: result["prices"] = df
 
         elif name == TYPE_FILENAME:
             df, err = load_types(file_bytes)
-            if err:
-                result["errors"].append(err)
-            else:
-                result["types"] = df
+            if err: result["errors"].append(err)
+            else: result["types"] = df
 
-        elif name == COMBINED_BOM_FILENAME:
+        elif name in SUPPORT_FILES:
+            pass  # BRD_Sub_Inv.xlsx etc.
+
+        elif is_combined_bom_filename(name):
+            # ── Combined BOM (e.g. "All Boms.xlsx") ──────────────────────────
             bom_dict, err = load_combined_bom(name, file_bytes)
             if err:
                 result["errors"].append(err)
@@ -272,15 +274,16 @@ def _load_all_local() -> dict:
                 result["bom"].update(bom_dict)
                 result["combined_bom_loaded"] = True
 
-        elif name in SUPPORT_FILES:
-            pass  # known support file handled elsewhere (e.g. BRD_Sub_Inv.xlsx)
-
         else:
+            individual_bom_names.append(name)
+
+    # ── Pass 2: individual BOM files — only when NO combined BOM was loaded ───
+    if not result.get("combined_bom_loaded"):
+        for name in individual_bom_names:
+            file_bytes = file_map[name]
             df, err = load_bom_file(name, file_bytes)
-            if err:
-                result["errors"].append(err)
-            else:
-                result["bom"][name] = df
+            if err: result["errors"].append(err)
+            else: result["bom"][name] = df
 
     return result
 
@@ -446,16 +449,41 @@ if bom_files:
     st.markdown("### ⚙️ Systems Quantity")
 
     _bom_names = sorted(bom_files.keys())
-    _names_1550  = sorted([n for n in _bom_names if "1550" in n])
-    _names_1310  = sorted([n for n in _bom_names if "1310" in n])
-    _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
-    _names_other = [n for n in _bom_names
-                    if n not in _names_1550 + _names_1310 + _names_br3]
 
     def _short(name: str) -> str:
         return (name.replace(".xlsx", "")
                     .replace("SYS-SP1-1-", "SP1-")
                     .replace("SYS-", ""))
+
+    # ── Quick Select ──────────────────────────────────────────────────────────
+    _qs_options = ["— select one —"] + [_short(n) for n in _bom_names]
+    _qs_col, _qs_btn_col, _clr_col = st.columns([3, 1.2, 1])
+    with _qs_col:
+        _qs_sel = st.selectbox(
+            "Quick select", options=_qs_options,
+            label_visibility="collapsed",
+            key="qs_system",
+        )
+    with _qs_btn_col:
+        if st.button("☑️ Select Only This", use_container_width=True,
+                     disabled=_qs_sel == "— select one —"):
+            _target = _bom_names[_qs_options.index(_qs_sel) - 1]
+            for _n in _bom_names:
+                st.session_state["_qty_persist"][_n] = 1 if _n == _target else 0
+                st.session_state[f"qty_{_n}"] = 1 if _n == _target else 0
+            st.rerun()
+    with _clr_col:
+        if st.button("✖️ Clear All", use_container_width=True):
+            for _n in _bom_names:
+                st.session_state["_qty_persist"][_n] = 0
+                st.session_state[f"qty_{_n}"] = 0
+            st.rerun()
+    # ─────────────────────────────────────────────────────────────────────────
+    _names_1550  = sorted([n for n in _bom_names if "1550" in n])
+    _names_1310  = sorted([n for n in _bom_names if "1310" in n])
+    _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
+    _names_other = [n for n in _bom_names
+                    if n not in _names_1550 + _names_1310 + _names_br3]
 
     def _qty_input(col, bom_name):
         with col:

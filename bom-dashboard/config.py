@@ -4,6 +4,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT.parent / "data"
 LOGO_PATH = PROJECT_ROOT / "logo.png"
+PCBA_ICON_PATH = PROJECT_ROOT / "pcba_icon.png"
 
 # ── BOM columns ───────────────────────────────────────────────────────────────
 BOM_SHEET = "DataSheet"
