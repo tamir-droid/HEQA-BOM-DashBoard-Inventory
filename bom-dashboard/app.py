@@ -590,11 +590,7 @@ with fc2:
 with fc3:
     search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
 
-_brd_col1, _brd_col2 = st.columns(2)
-with _brd_col1:
-    _exclude_brd = st.checkbox("🔲 Exclude BRD sub-components", value=False)
-with _brd_col2:
-    _only_brd = st.checkbox("🔲 BRD sub-components only", value=False)
+# BRD sub-components are always excluded from main dashboard (visible only in 🔌 BRD Assembly page)
 
 # Apply filters
 df_show = results.copy()
@@ -669,11 +665,9 @@ if search:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
 
+# Always exclude BRD sub-components from main dashboard
 if "Under BRD" in df_show.columns:
-    if _exclude_brd and not _only_brd:
-        df_show = df_show[~df_show["Under BRD"]]
-    elif _only_brd and not _exclude_brd:
-        df_show = df_show[df_show["Under BRD"]]
+    df_show = df_show[~df_show["Under BRD"]]
 
 _cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
 with _cap_col:
