@@ -37,7 +37,8 @@ PRICE_FILENAME = "item cost.xlsx"
 TYPE_FILENAME = "Buy & Make.xlsx"
 COMBINED_BOM_FILENAME = "ALL_BOMS.xlsx"
 BRD_SUB_INV_FILENAME = "BRD_Sub_Inv.xlsx"
-SUPPORT_FILES = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME, COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME}
+SUPPORT_FILES = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME, COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME,
+                 "All Boms.xlsx", "All BOMs.xlsx", "all boms.xlsx"}
 
 # ── Session state keys ────────────────────────────────────────────────────────
 SS_DATA = "data"
