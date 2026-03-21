@@ -1,8 +1,8 @@
 """BRD Assembly Viewer — HEQA.
 
 Select a BRD assembly and view all its sub-components from the BOM,
-including Find Number, Level, Qty, cost, inventory status and subcontractor stock.
-Filters (Part Type / Status / Search) and cost metrics mirror the Main Dashboard.
+including Find Number, Level, Qty, cost, inventory status, subcontractor stock,
+and PO / followup tracking (shared with the Main Dashboard).
 """
 
 import datetime
@@ -17,7 +17,7 @@ import streamlit as st
 
 from config import (
     DATA_DIR, LOGO_PATH,
-    SS_AUTH, SS_IS_ADMIN, SS_CURRENT_USER,
+    SS_AUTH, SS_IS_ADMIN, SS_CURRENT_USER, SS_FOLLOWUP,
     BOM_LEVEL_COL, BOM_VPN_COL, BOM_QTY_COL, BOM_DESC_COL,
     BOM_MFR_COL, BOM_MPN_COL, BOM_FIND_NUM_COL,
     INV_FILENAME, INV_KEY_COL, INV_QTY_COL,
@@ -29,6 +29,7 @@ from utils.bom_parser import load_bom_file
 from utils.combined_bom_parser import load_combined_bom
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
+from utils.followup import load_followup, save_followup
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -76,8 +77,7 @@ with st.sidebar:
 
     st.caption(
         f"Upload an Excel file with columns:\n"
-        f"**`{INV_KEY_COL}`** (Heqa P.N) and **`{INV_QTY_COL}`** (Qty)\n"
-        f"— same format as main Inventory.xlsx"
+        f"**`{INV_KEY_COL}`** (Heqa P.N) and **`{INV_QTY_COL}`** (Qty)"
     )
 
     _sub_upload = st.file_uploader(
@@ -132,6 +132,9 @@ if not st.session_state.get(SS_AUTH):
     st.warning("🔒 Please log in from the main page first.")
     st.stop()
 
+# ── Always reload followup so all users see latest PO data ────────────────────
+st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
+
 # ── Header ─────────────────────────────────────────────────────────────────────
 if LOGO_PATH.exists():
     logo_col, title_col = st.columns([1, 3])
@@ -146,10 +149,6 @@ else:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _parse_level(val) -> int:
-    """Parse mixed-type Level column to integer.
-
-    Handles plain ints, pandas float reads (2.0→2), and '.....8' strings.
-    """
     try:
         s = str(val).strip().lstrip(".")
         return int(float(s))
@@ -157,9 +156,15 @@ def _parse_level(val) -> int:
         return 999
 
 
+def _parse_date(s):
+    try:
+        return datetime.date.fromisoformat(str(s)[:10]) if s else None
+    except (ValueError, TypeError):
+        return None
+
+
 @st.cache_data(show_spinner=False)
 def _load_all_boms() -> dict[str, pd.DataFrame]:
-    """Load all BOM files — individual SYS-*.xlsx and/or combined ALL_BOMS.xlsx."""
     bom_files: dict[str, pd.DataFrame] = {}
     if not DATA_DIR.exists():
         return bom_files
@@ -188,7 +193,6 @@ def _load_all_boms() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(show_spinner=False)
 def _load_price_map() -> dict[str, float]:
-    """Return {vpn: unit_price_usd} from item cost.xlsx."""
     p = DATA_DIR / PRICE_FILENAME
     if not p.exists():
         return {}
@@ -209,7 +213,6 @@ def _load_price_map() -> dict[str, float]:
 
 @st.cache_data(show_spinner=False)
 def _load_type_map() -> dict[str, str]:
-    """Return {vpn: type (P/R/O)} from Buy & Make.xlsx."""
     p = DATA_DIR / TYPE_FILENAME
     if not p.exists():
         return {}
@@ -229,7 +232,6 @@ def _load_type_map() -> dict[str, str]:
 
 
 def _get_brd_assemblies(bom_files: dict) -> dict[str, list[str]]:
-    """Return {brd_vpn: [bom_key, ...]} for all BRD-prefixed assemblies."""
     result: dict[str, list[str]] = {}
     for bom_name, df in bom_files.items():
         if BOM_VPN_COL not in df.columns:
@@ -243,7 +245,6 @@ def _get_brd_assemblies(bom_files: dict) -> dict[str, list[str]]:
 
 
 def _get_components(bom_df: pd.DataFrame, brd_vpn: str) -> pd.DataFrame:
-    """Extract all rows directly under brd_vpn in the BOM hierarchy."""
     rows = []
     in_brd = False
     brd_level = None
@@ -328,7 +329,7 @@ if not brd_assemblies:
     st.warning("⚠️ No BRD-prefixed assemblies found in the uploaded BOM files.")
     st.stop()
 
-# ── Selector + Qty ─────────────────────────────────────────────────────────────
+# ── Selector + BRD Qty ─────────────────────────────────────────────────────────
 sel_col, qty_col_ui, info_col = st.columns([3, 1, 3])
 with sel_col:
     sel_brd = st.selectbox(
@@ -376,7 +377,8 @@ sub_inv_map: dict[str, float] = _load_sub_inventory()
 has_sub_inv = bool(sub_inv_map)
 
 price_map: dict[str, float] = _load_price_map()
-type_map: dict[str, str]  = _load_type_map()
+type_map:  dict[str, str]   = _load_type_map()
+followup:  dict              = st.session_state.get(SS_FOLLOWUP, {})
 
 # ── Build display DataFrame ─────────────────────────────────────────────────────
 disp_cols = []
@@ -397,22 +399,48 @@ disp = disp.rename(columns={
     BOM_QTY_COL:      "Qty (BOM)",
 })
 
-# ── Enrich with lookups ────────────────────────────────────────────────────────
+# ── Enrich columns ─────────────────────────────────────────────────────────────
 if "Heqa P.N" in disp.columns:
-    disp["In Stock"]   = disp["Heqa P.N"].map(lambda v: inv_map.get(str(v).strip(), 0))
+    disp["In Stock"]     = disp["Heqa P.N"].map(lambda v: inv_map.get(str(v).strip(), 0))
     disp["Unit Price $"] = disp["Heqa P.N"].map(lambda v: price_map.get(str(v).strip()))
-    disp["Part Type"]  = disp["Heqa P.N"].map(lambda v: type_map.get(str(v).strip(), "—"))
+    disp["Part Type"]    = disp["Heqa P.N"].map(lambda v: type_map.get(str(v).strip(), "—"))
     if has_sub_inv:
         disp["Sub Stock"] = disp["Heqa P.N"].map(lambda v: sub_inv_map.get(str(v).strip(), 0))
 
-# Scale by BRD Qty
-disp["Qty (BOM)"] = pd.to_numeric(disp["Qty (BOM)"], errors="coerce").fillna(0)
+disp["Qty (BOM)"]    = pd.to_numeric(disp["Qty (BOM)"], errors="coerce").fillna(0)
 disp["Qty Required"] = disp["Qty (BOM)"] * brd_qty
+
+# ── PO / Followup columns ──────────────────────────────────────────────────────
+def _order_status(vpn: str) -> str:
+    if vpn not in followup:
+        return "—"
+    po = str(followup[vpn].get("po", "")).strip().upper()
+    if po == "NA":
+        return "⬜ Ignored"
+    return "🔵 Ordered"
+
+disp["Order Status"] = disp["Heqa P.N"].map(_order_status)
+disp["PO #"]         = disp["Heqa P.N"].map(
+    lambda v: followup[v].get("po", "") if v in followup else ""
+)
+disp["Due Date"]     = disp["Heqa P.N"].map(
+    lambda v: _parse_date(followup[v].get("due_date", "")) if v in followup else None
+)
+disp["Qty Ordered"]  = pd.to_numeric(
+    disp["Heqa P.N"].map(lambda v: followup[v].get("qty_ordered") if v in followup else None),
+    errors="coerce",
+)
+
+# ── Cost columns ───────────────────────────────────────────────────────────────
 disp["Total Cost $"] = disp["Unit Price $"] * disp["Qty Required"]
 
+# NA in PO # → zero out cost
+_na_mask = disp["PO #"].str.strip().str.upper() == "NA"
+disp.loc[_na_mask, "Total Cost $"] = 0
 
-# ── Status (based on scaled Qty Required) ──────────────────────────────────────
-def _status(row):
+
+# ── Status ─────────────────────────────────────────────────────────────────────
+def _status(row) -> str:
     try:
         qty_req  = float(row.get("Qty Required", 0) or 0)
         in_stock = float(row.get("In Stock",     0) or 0)
@@ -429,6 +457,25 @@ def _status(row):
 
 disp["Status"] = disp.apply(_status, axis=1)
 
+
+# ── Status dot (with PO awareness) ────────────────────────────────────────────
+def _dot(row) -> str:
+    po = str(row.get("PO #", "")).strip().upper()
+    if po == "NA":
+        return "⬜"
+    status = row.get("Status", "")
+    ordered = row.get("Order Status", "") == "🔵 Ordered"
+    if "Missing" in status and ordered:
+        return "🟠"
+    elif "Missing" in status:
+        return "🔴"
+    elif "In Stock" in status:
+        return "🟢"
+    else:
+        return "🟡"
+
+disp.insert(0, "●", disp.apply(_dot, axis=1))
+
 # ── Sort ───────────────────────────────────────────────────────────────────────
 disp["Find #"] = pd.to_numeric(disp["Find #"], errors="coerce")
 disp = disp.sort_values(["Find #", "Level"], na_position="last").reset_index(drop=True)
@@ -440,7 +487,7 @@ with info_col:
     _in_stock = (disp["Status"] == "✅ In Stock").sum()
     _partial  = (disp["Status"] == "🟡 Partial").sum()
     _bom_files = ", ".join(brd_assemblies.get(sel_brd, []))
-    _sub_note  = f" &nbsp;|&nbsp; 🏭 Sub Inv: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
+    _sub_note  = f" &nbsp;|&nbsp; 🏭 Sub: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
     st.markdown(
         f"**{sel_brd}** → **{_total}** components &nbsp;|&nbsp; "
         f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}  \n"
@@ -450,50 +497,49 @@ with info_col:
 
 st.markdown("---")
 
-# ── Filters — mirror Main Dashboard ───────────────────────────────────────────
+# ── Filters ────────────────────────────────────────────────────────────────────
 st.markdown("### 🔍 Filters")
 _f1, _f2, _f3 = st.columns([2, 2, 3])
 
-# Part Type filter
-_all_types = sorted(disp["Part Type"].dropna().unique().tolist()) if "Part Type" in disp.columns else []
+_all_types    = sorted(disp["Part Type"].dropna().unique().tolist()) if "Part Type" in disp.columns else []
 _type_options = ["All"] + _all_types
 with _f1:
     st.caption("Part Type")
     _default_type = "R" if "R" in _all_types else "All"
-    _type_idx = _type_options.index(_default_type) if _default_type in _type_options else 0
     sel_type = st.selectbox(
         "Part Type", _type_options,
-        index=_type_idx,
-        label_visibility="collapsed",
-        key="brd_type_filter",
+        index=_type_options.index(_default_type) if _default_type in _type_options else 0,
+        label_visibility="collapsed", key="brd_type_filter",
     )
 
-# Status filter
 with _f2:
     st.caption("Status")
     sel_status = st.selectbox(
         "Status",
-        ["All", "🔴 Missing", "🟡 Partial", "✅ In Stock"],
-        index=1,   # default = Missing
-        label_visibility="collapsed",
-        key="brd_status_filter",
+        ["All", "🔴 Missing", "🟠 Tracking", "🟡 Partial", "✅ In Stock"],
+        index=1,
+        label_visibility="collapsed", key="brd_status_filter",
     )
 
-# Search
 with _f3:
     st.caption("🔍 Search (VPN / Description / Manufacturer)")
     search_q = st.text_input(
         "Search", placeholder="Type P/N, description or MFR…",
-        label_visibility="collapsed",
-        key="brd_search",
+        label_visibility="collapsed", key="brd_search",
     )
 
 # Apply filters
 filt = disp.copy()
 if sel_type != "All":
     filt = filt[filt["Part Type"] == sel_type]
-if sel_status != "All":
-    filt = filt[filt["Status"] == sel_status]
+if sel_status == "🔴 Missing":
+    filt = filt[filt["Status"] == "🔴 Missing"]
+elif sel_status == "🟠 Tracking":
+    filt = filt[(filt["Status"] == "🔴 Missing") & (filt["Order Status"] == "🔵 Ordered")]
+elif sel_status == "🟡 Partial":
+    filt = filt[filt["Status"] == "🟡 Partial"]
+elif sel_status == "✅ In Stock":
+    filt = filt[filt["Status"] == "✅ In Stock"]
 if search_q:
     q = search_q.strip().lower()
     mask = (
@@ -504,68 +550,125 @@ if search_q:
     )
     filt = filt[mask]
 
-# ── Cost metrics ───────────────────────────────────────────────────────────────
-_order_cost     = filt.loc[filt["Status"].isin(["🔴 Missing", "🟡 Partial"]), "Total Cost $"].sum(skipna=True)
+# ── Cost metrics + Save button ─────────────────────────────────────────────────
+_order_cost     = filt.loc[filt["Status"].isin(["🔴 Missing", "🟡 Partial"]) & ~_na_mask.reindex(filt.index, fill_value=False), "Total Cost $"].sum(skipna=True)
 _total_bom_cost = filt["Total Cost $"].sum(skipna=True)
 
-_mc1, _mc2, _mc3 = st.columns([2, 2, 2])
+_mc1, _mc2, _mc3, _save_col = st.columns([2, 2, 2, 1])
 with _mc1:
     st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts  |  BRD Qty: **×{brd_qty}**")
 with _mc2:
     st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.0f}")
 with _mc3:
     st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.0f}")
+with _save_col:
+    st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
+    if st.button("💾 Save Changes", use_container_width=True, key="brd_save_top"):
+        st.session_state["_brd_do_save"] = True
 
+# ── Legend ─────────────────────────────────────────────────────────────────────
+st.caption(
+    "🔴 Missing &nbsp;|&nbsp; 🟠 Ordered / tracking &nbsp;|&nbsp; "
+    "🟢 In stock &nbsp;|&nbsp; 🟡 Partial &nbsp;|&nbsp; ⬜ Ignored (NA)  "
+    "— edit **PO #**, **Due Date**, **Qty Ordered** directly in the table, then click **Save Changes**."
+)
 
-# ── Color coding ───────────────────────────────────────────────────────────────
-def _row_color(row):
-    s = row.get("Status", "")
-    color = {"🔴 Missing": "#ffd6d6", "🟡 Partial": "#fff3cd", "✅ In Stock": "#d4edda"}.get(s, "white")
-    return [f"background-color: {color}"] * len(row)
-
+# ── Column order ───────────────────────────────────────────────────────────────
+_col_order = [
+    "●", "Find #", "Level", "Heqa P.N", "Description", "MFR Name", "MPN",
+    "Part Type", "Qty (BOM)", "Qty Required", "In Stock",
+    "Sub Stock",
+    "Unit Price $", "Total Cost $",
+    "Order Status", "PO #", "Due Date", "Qty Ordered",
+    "Status",
+]
+_display_cols = [c for c in _col_order if c in filt.columns]
 
 # ── Column config ──────────────────────────────────────────────────────────────
 _col_cfg: dict = {
-    "Find #":         st.column_config.NumberColumn("Find #", format="%d", width="small"),
-    "Level":          st.column_config.TextColumn("Level", width="small"),
-    "Heqa P.N":       st.column_config.TextColumn("Heqa P.N"),
-    "Description":    st.column_config.TextColumn("Description", width="large"),
-    "MFR Name":       st.column_config.TextColumn("MFR Name"),
-    "MPN":            st.column_config.TextColumn("MPN"),
-    "Part Type":      st.column_config.TextColumn("Type", width="small"),
-    "Qty (BOM)":      st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
-    "Qty Required":   st.column_config.NumberColumn(f"Qty ×{brd_qty}", format="%g", width="small"),
-    "In Stock":       st.column_config.NumberColumn("In Stock", format="%g", width="small"),
-    "Unit Price $":   st.column_config.NumberColumn("Unit Price $", format="$%.2f"),
-    "Total Cost $":   st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
-    "Status":         st.column_config.TextColumn("Status"),
+    "●":            st.column_config.TextColumn("●", width="small"),
+    "Find #":       st.column_config.NumberColumn("Find #", format="%d", width="small"),
+    "Level":        st.column_config.TextColumn("Level", width="small"),
+    "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
+    "Description":  st.column_config.TextColumn("Description", width="large"),
+    "MFR Name":     st.column_config.TextColumn("MFR Name"),
+    "MPN":          st.column_config.TextColumn("MPN"),
+    "Part Type":    st.column_config.TextColumn("Type", width="small"),
+    "Qty (BOM)":    st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
+    "Qty Required": st.column_config.NumberColumn(f"Qty ×{brd_qty}", format="%g", width="small"),
+    "In Stock":     st.column_config.NumberColumn("In Stock", format="%g", width="small"),
+    "Sub Stock":    st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small"),
+    "Unit Price $": st.column_config.NumberColumn("Unit Price $", format="$%.2f"),
+    "Total Cost $": st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
+    "Order Status": st.column_config.TextColumn("Order Status", width="small"),
+    "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost."),
+    "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
+    "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=1, format="%g"),
+    "Status":       st.column_config.TextColumn("Status"),
 }
-if has_sub_inv:
-    _col_cfg["Sub Stock"] = st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small")
 
-# Column display order
-_display_order = [
-    "Find #", "Level", "Heqa P.N", "Description", "MFR Name", "MPN",
-    "Part Type", "Qty (BOM)", "Qty Required", "In Stock",
-]
-if has_sub_inv:
-    _display_order.append("Sub Stock")
-_display_order += ["Unit Price $", "Total Cost $", "Status"]
-_display_order = [c for c in _display_order if c in filt.columns]
+# ── Editable table ─────────────────────────────────────────────────────────────
+_editable = {"PO #", "Due Date", "Qty Ordered"}
+_disabled  = [c for c in _display_cols if c not in _editable]
 
-# ── Table ──────────────────────────────────────────────────────────────────────
-st.dataframe(
-    filt[_display_order].style.apply(_row_color, axis=1),
+edited_df = st.data_editor(
+    filt[_display_cols],
+    column_config=_col_cfg,
+    disabled=_disabled,
     use_container_width=True,
     height=min(len(filt) * 35 + 50, 800),
     hide_index=True,
-    column_config=_col_cfg,
+    key="brd_table",
 )
+
+# ── Save logic ─────────────────────────────────────────────────────────────────
+if st.session_state.pop("_brd_do_save", False):
+    _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
+
+    for _, row in edited_df.iterrows():
+        vpn = str(row.get("Heqa P.N", "")).strip()
+        if not vpn or vpn.lower() == "nan":
+            continue
+
+        po = str(row.get("PO #", "") or "").strip()
+
+        _due_raw = row.get("Due Date")
+        due = ""
+        try:
+            if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                _d = str(_due_raw)[:10]
+                datetime.date.fromisoformat(_d)
+                due = _d
+        except (ValueError, TypeError):
+            due = ""
+
+        qty_ord = row.get("Qty Ordered")
+        qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+
+        existing = _fup.get(vpn, {})
+        if po or due or qty_ord_val:
+            if vpn not in _fup:
+                _fup[vpn] = {
+                    "date": datetime.date.today().isoformat(),
+                    "user": st.session_state.get(SS_CURRENT_USER, ""),
+                    "notes": "",
+                }
+            _fup[vpn]["po"] = po
+            _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
+            _fup[vpn]["qty_ordered"] = qty_ord_val
+        elif vpn in _fup and not _fup[vpn].get("manually_marked", False):
+            del _fup[vpn]
+
+    st.session_state[SS_FOLLOWUP] = _fup
+    save_followup(DATA_DIR, _fup)
+    st.session_state.pop("brd_table", None)   # clear widget state
+    st.success("✅ Saved!")
+    st.rerun()
 
 # ── Export ─────────────────────────────────────────────────────────────────────
 st.download_button(
     "⬇️ Export to CSV",
-    data=filt[_display_order].to_csv(index=False).encode("utf-8-sig"),
+    data=filt[_display_cols].to_csv(index=False).encode("utf-8-sig"),
     file_name=f"BRD_{sel_brd}_{datetime.date.today()}.csv",
     mime="text/csv",
 )
