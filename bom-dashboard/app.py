@@ -17,6 +17,7 @@ from config import (
     INV_QTY_COL,
     PRICE_FILENAME,
     TYPE_FILENAME,
+    COMBINED_BOM_FILENAME,
     TYPE_KEY_COL,
     TYPE_COL,
     SUPPORT_FILES,
@@ -33,6 +34,7 @@ from config import (
     INV_QTY_COL,
 )
 from utils.bom_parser import load_bom_file
+from utils.combined_bom_parser import load_combined_bom
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -262,6 +264,14 @@ def _load_all_local() -> dict:
             else:
                 result["types"] = df
 
+        elif name == COMBINED_BOM_FILENAME:
+            bom_dict, err = load_combined_bom(name, file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["bom"].update(bom_dict)
+                result["combined_bom_loaded"] = True
+
         else:
             df, err = load_bom_file(name, file_bytes)
             if err:
@@ -333,7 +343,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption(f"📁 `{DATA_DIR.name}/`")
-    st.caption(f"📊 BOMs: **{len(bom_files)}** file(s)")
+    _combined_loaded = data.get("combined_bom_loaded", False)
+    _bom_src = " *(combined)*" if _combined_loaded else ""
+    st.caption(f"📊 BOMs: **{len(bom_files)}** system(s){_bom_src}")
     st.caption(f"🗃️ System inventory: **{len(inventory_df):,}** rows")
     _site_count = len(st.session_state.get(SS_SITE_INV, {}))
     st.caption(f"🏭 Site inventory: **{_site_count:,}** parts")

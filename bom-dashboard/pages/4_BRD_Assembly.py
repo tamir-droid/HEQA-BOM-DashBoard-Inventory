@@ -1,9 +1,11 @@
 """BRD Assembly Viewer — HEQA.
 
 Select a BRD assembly and view all its sub-components from the BOM,
-including Find Number, Level, Qty, inventory status.
+including Find Number, Level, Qty, inventory status, and subcontractor stock.
 """
 
+import datetime
+import io
 import sys
 from pathlib import Path
 
@@ -18,8 +20,10 @@ from config import (
     BOM_LEVEL_COL, BOM_VPN_COL, BOM_QTY_COL, BOM_DESC_COL,
     BOM_MFR_COL, BOM_MPN_COL, BOM_FIND_NUM_COL,
     INV_KEY_COL, INV_QTY_COL, INV_FILENAME,
+    COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME, SUPPORT_FILES,
 )
 from utils.bom_parser import load_bom_file
+from utils.combined_bom_parser import load_combined_bom
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -48,6 +52,84 @@ with st.sidebar:
             st.switch_page("pages/3_User_Management.py")
     st.markdown("---")
 
+    # ── Subcontractor Inventory Upload ────────────────────────────────────────
+    st.markdown("### 🏭 Subcontractor Stock")
+    _sub_path = DATA_DIR / BRD_SUB_INV_FILENAME
+
+    if _sub_path.exists():
+        _sz = _sub_path.stat().st_size / 1024
+        st.success(f"✅ Loaded ({_sz:,.0f} KB)")
+        if st.button("🗑️ Remove Sub Inv", use_container_width=True, key="del_sub_inv"):
+            try:
+                _sub_path.unlink()
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
+    else:
+        st.info("No subcontractor inventory uploaded.")
+
+    st.caption(
+        f"Upload an Excel file with columns:\n"
+        f"**`{INV_KEY_COL}`** (Heqa P.N) and **`{INV_QTY_COL}`** (Qty)\n"
+        f"— same format as main Inventory.xlsx"
+    )
+
+    _sub_upload = st.file_uploader(
+        "Upload Subcontractor Inventory",
+        type=["xlsx", "xls"],
+        key="sub_inv_upload",
+        label_visibility="collapsed",
+    )
+
+    if _sub_upload is not None:
+        _sub_bytes = _sub_upload.read()
+        try:
+            _sub_preview = pd.read_excel(io.BytesIO(_sub_bytes), sheet_name="Sheet1")
+            _sub_preview.columns = _sub_preview.columns.str.strip()
+            # Try flexible column detection
+            _key_col = None
+            _qty_col = None
+            for c in _sub_preview.columns:
+                cs = str(c).strip()
+                if cs == INV_KEY_COL or cs.lower() in ("heqa p.n", "vendor part number", 'מק"ט'):
+                    _key_col = c
+                if cs == INV_QTY_COL or cs.lower() in ("qty", "quantity", "כמות"):
+                    _qty_col = c
+            # Fallback: use first two columns
+            if _key_col is None and len(_sub_preview.columns) >= 1:
+                _key_col = _sub_preview.columns[0]
+            if _qty_col is None and len(_sub_preview.columns) >= 2:
+                _qty_col = _sub_preview.columns[1]
+
+            if _key_col and _qty_col:
+                _sub_rows = int((_sub_preview[_qty_col].apply(pd.to_numeric, errors="coerce") > 0).sum())
+                st.success(f"✅ {len(_sub_preview):,} rows, {_sub_rows:,} with stock")
+                if st.button("💾 Save Sub Inv", type="primary", use_container_width=True, key="save_sub_inv"):
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    _sub_path.write_bytes(_sub_bytes)
+                    st.cache_data.clear()
+                    st.success("✅ Saved!")
+                    st.rerun()
+            else:
+                st.error("❌ Cannot detect P/N and Qty columns.")
+        except Exception as exc:
+            # Retry without specifying sheet name
+            try:
+                _sub_preview2 = pd.read_excel(io.BytesIO(_sub_bytes))
+                _sub_preview2.columns = _sub_preview2.columns.str.strip()
+                st.warning(f"ℹ️ Sheet 'Sheet1' not found. Found {len(_sub_preview2):,} rows.")
+                if st.button("💾 Save Sub Inv anyway", type="primary", use_container_width=True, key="save_sub_inv2"):
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    _sub_path.write_bytes(_sub_bytes)
+                    st.cache_data.clear()
+                    st.success("✅ Saved!")
+                    st.rerun()
+            except Exception:
+                st.error(f"❌ {exc}")
+
+    st.markdown("---")
+
 # ── Auth guard ─────────────────────────────────────────────────────────────────
 if not st.session_state.get(SS_AUTH):
     st.warning("🔒 Please log in from the main page first.")
@@ -64,33 +146,60 @@ if LOGO_PATH.exists():
 else:
     st.title("🔌 BRD Assembly Viewer")
 
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _parse_level(val) -> int:
-    """Parse mixed-type Level column to integer."""
+    """Parse mixed-type Level column to integer.
+
+    Handles:
+    - Plain integers: 1, 2, 7
+    - Pandas reads integers as floats in mixed columns: 2.0, 7.0
+    - Dot-prefixed strings for deeper levels: '.....8', '.....9', '.....10'
+    """
     try:
-        return int(str(val).strip().lstrip("."))
+        s = str(val).strip().lstrip(".")
+        return int(float(s))   # int(float(...)) handles both "8" and "8.0"
     except (ValueError, TypeError):
         return 999
 
 
 @st.cache_data(show_spinner=False)
 def _load_all_boms() -> dict[str, pd.DataFrame]:
-    """Load all BOM files from data/ folder."""
-    bom_files = {}
+    """Load all BOM files from data/ folder.
+
+    Supports both individual SYS-*.xlsx files and a single ALL_BOMS.xlsx
+    combined file (with a 'System' column).
+    """
+    bom_files: dict[str, pd.DataFrame] = {}
     if not DATA_DIR.exists():
         return bom_files
-    for f in DATA_DIR.glob("SYS-*.xlsx"):
+
+    # ── Combined BOM (ALL_BOMS.xlsx) ──────────────────────────────────────────
+    combined_path = DATA_DIR / COMBINED_BOM_FILENAME
+    if combined_path.exists():
+        try:
+            bom_dict, err = load_combined_bom(COMBINED_BOM_FILENAME, combined_path.read_bytes())
+            if err is None and bom_dict:
+                bom_files.update(bom_dict)
+        except Exception:
+            pass
+
+    # ── Individual BOM files (everything except support files) ────────────────
+    for f in DATA_DIR.glob("*.xlsx"):
+        if f.name in SUPPORT_FILES:
+            continue
         try:
             df, err = load_bom_file(f.name, f.read_bytes())
             if err is None and df is not None and not df.empty:
                 bom_files[f.name] = df
         except Exception:
             continue
+
     return bom_files
 
 
 def _get_brd_assemblies(bom_files: dict) -> dict[str, list[str]]:
-    """Return {brd_vpn: [bom_file_name, ...]} for all BRD-prefixed assemblies found in BOMs."""
+    """Return {brd_vpn: [bom_key, ...]} for all BRD-prefixed assemblies found in BOMs."""
     result: dict[str, list[str]] = {}
     for bom_name, df in bom_files.items():
         if BOM_VPN_COL not in df.columns:
@@ -119,6 +228,9 @@ def _get_components(bom_df: pd.DataFrame, brd_vpn: str) -> pd.DataFrame:
             continue
 
         if in_brd:
+            # Skip blank/header rows — they don't define hierarchy boundaries
+            if not vpn or vpn.lower() == "nan":
+                continue
             if brd_level is not None and level <= brd_level:
                 break  # Exited the BRD sub-tree
             rows.append(row)
@@ -126,6 +238,7 @@ def _get_components(bom_df: pd.DataFrame, brd_vpn: str) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False)
 def _load_inventory() -> pd.DataFrame:
     """Load Inventory.xlsx for In Stock lookup."""
     inv_path = DATA_DIR / INV_FILENAME
@@ -135,6 +248,47 @@ def _load_inventory() -> pd.DataFrame:
         return pd.read_excel(inv_path, sheet_name="Sheet1")
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _load_sub_inventory() -> dict[str, float]:
+    """Load BRD_Sub_Inv.xlsx. Returns {heqa_pn: qty} map."""
+    sub_path = DATA_DIR / BRD_SUB_INV_FILENAME
+    if not sub_path.exists():
+        return {}
+    try:
+        # Try Sheet1 first, then first sheet
+        try:
+            df = pd.read_excel(sub_path, sheet_name="Sheet1")
+        except Exception:
+            df = pd.read_excel(sub_path)
+        df.columns = df.columns.str.strip()
+
+        # Detect key and qty columns flexibly
+        key_col = qty_col = None
+        for c in df.columns:
+            cs = str(c).strip()
+            if cs == INV_KEY_COL or cs.lower() in ("heqa p.n", "vendor part number", 'מק"ט'):
+                key_col = c
+            if cs == INV_QTY_COL or cs.lower() in ("qty", "quantity", "כמות"):
+                qty_col = c
+        if key_col is None and len(df.columns) >= 1:
+            key_col = df.columns[0]
+        if qty_col is None and len(df.columns) >= 2:
+            qty_col = df.columns[1]
+
+        if key_col is None or qty_col is None:
+            return {}
+
+        result: dict[str, float] = {}
+        for _, r in df.iterrows():
+            k = str(r[key_col]).strip()
+            v = pd.to_numeric(r[qty_col], errors="coerce")
+            if k and k.lower() != "nan" and pd.notna(v):
+                result[k] = float(v)
+        return result
+    except Exception:
+        return {}
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
@@ -175,15 +329,18 @@ if not all_components:
 
 combined = pd.concat(all_components, ignore_index=True)
 
-# ── Load inventory for In Stock qty ────────────────────────────────────────────
+# ── Load inventories ────────────────────────────────────────────────────────────
 inv_df = _load_inventory()
 inv_map: dict[str, float] = {}
 if not inv_df.empty and INV_KEY_COL in inv_df.columns and INV_QTY_COL in inv_df.columns:
     for _, r in inv_df.iterrows():
         k = str(r[INV_KEY_COL]).strip()
         v = pd.to_numeric(r[INV_QTY_COL], errors="coerce")
-        if k and pd.notna(v):
+        if k and k.lower() != "nan" and pd.notna(v):
             inv_map[k] = float(v)
+
+sub_inv_map: dict[str, float] = _load_sub_inventory()
+has_sub_inv = bool(sub_inv_map)
 
 # ── Build display DataFrame ─────────────────────────────────────────────────────
 disp_cols = []
@@ -205,23 +362,29 @@ disp = disp.rename(columns={
     BOM_QTY_COL:      "Qty (BOM)",
 })
 
-# Add In Stock column
+# Add inventory columns
 if "Heqa P.N" in disp.columns:
     disp["In Stock"] = disp["Heqa P.N"].map(lambda v: inv_map.get(str(v).strip(), 0))
+    if has_sub_inv:
+        disp["Sub Stock"] = disp["Heqa P.N"].map(lambda v: sub_inv_map.get(str(v).strip(), 0))
+
 
 # Add status indicator
 def _status(row):
     try:
-        qty_bom = float(row.get("Qty (BOM)", 0) or 0)
-        in_stock = float(row.get("In Stock", 0) or 0)
-        if in_stock >= qty_bom:
+        qty_bom  = float(row.get("Qty (BOM)", 0) or 0)
+        in_stock = float(row.get("In Stock",  0) or 0)
+        sub_stk  = float(row.get("Sub Stock", 0) or 0) if has_sub_inv else 0.0
+        total    = in_stock + sub_stk
+        if total >= qty_bom:
             return "✅ In Stock"
-        elif in_stock > 0:
+        elif total > 0:
             return "🟡 Partial"
         else:
             return "🔴 Missing"
     except Exception:
         return "—"
+
 
 disp["Status"] = disp.apply(_status, axis=1)
 
@@ -231,14 +394,15 @@ disp = disp.sort_values(["Find #", "Level"], na_position="last").reset_index(dro
 
 # ── Info bar ───────────────────────────────────────────────────────────────────
 with info_col:
-    _total = len(disp)
-    _missing = (disp["Status"] == "🔴 Missing").sum()
+    _total    = len(disp)
+    _missing  = (disp["Status"] == "🔴 Missing").sum()
     _in_stock = (disp["Status"] == "✅ In Stock").sum()
-    _partial = (disp["Status"] == "🟡 Partial").sum()
+    _partial  = (disp["Status"] == "🟡 Partial").sum()
     _bom_files = ", ".join(brd_assemblies.get(sel_brd, []))
+    _sub_note  = f" &nbsp;|&nbsp; 🏭 Sub Inv: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
     st.markdown(
         f"**{sel_brd}** → **{_total}** components &nbsp;|&nbsp; "
-        f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}  \n"
+        f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}  \n"
         f"<small>Found in: {_bom_files}</small>",
         unsafe_allow_html=True,
     )
@@ -255,6 +419,7 @@ with fc1:
 if sel_status != "All":
     disp = disp[disp["Status"] == sel_status]
 
+
 # ── Color coding ───────────────────────────────────────────────────────────────
 def _row_color(row):
     s = row.get("Status", "")
@@ -268,27 +433,32 @@ def _row_color(row):
         color = "white"
     return [f"background-color: {color}"] * len(row)
 
+
+# ── Column config ──────────────────────────────────────────────────────────────
+_col_cfg = {
+    "Find #":      st.column_config.NumberColumn("Find #", format="%d", width="small"),
+    "Level":       st.column_config.TextColumn("Level", width="small"),
+    "Heqa P.N":    st.column_config.TextColumn("Heqa P.N"),
+    "Description": st.column_config.TextColumn("Description", width="large"),
+    "MFR Name":    st.column_config.TextColumn("MFR Name"),
+    "MPN":         st.column_config.TextColumn("MPN"),
+    "Qty (BOM)":   st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
+    "In Stock":    st.column_config.NumberColumn("In Stock", format="%g", width="small"),
+    "Status":      st.column_config.TextColumn("Status"),
+}
+if has_sub_inv:
+    _col_cfg["Sub Stock"] = st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small")
+
 # ── Table ──────────────────────────────────────────────────────────────────────
 st.dataframe(
     disp.style.apply(_row_color, axis=1),
     use_container_width=True,
     height=min(len(disp) * 35 + 50, 800),
     hide_index=True,
-    column_config={
-        "Find #":      st.column_config.NumberColumn("Find #", format="%d", width="small"),
-        "Level":       st.column_config.TextColumn("Level", width="small"),
-        "Heqa P.N":    st.column_config.TextColumn("Heqa P.N"),
-        "Description": st.column_config.TextColumn("Description", width="large"),
-        "MFR Name":    st.column_config.TextColumn("MFR Name"),
-        "MPN":         st.column_config.TextColumn("MPN"),
-        "Qty (BOM)":   st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
-        "In Stock":    st.column_config.NumberColumn("In Stock", format="%g", width="small"),
-        "Status":      st.column_config.TextColumn("Status"),
-    },
+    column_config=_col_cfg,
 )
 
 # ── Export ─────────────────────────────────────────────────────────────────────
-import datetime
 st.download_button(
     "⬇️ Export to CSV",
     data=disp.to_csv(index=False).encode("utf-8-sig"),
