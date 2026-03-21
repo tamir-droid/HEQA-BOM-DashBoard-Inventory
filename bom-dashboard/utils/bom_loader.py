@@ -106,7 +106,8 @@ def load_all_boms() -> tuple[dict[str, pd.DataFrame], list[str]]:
 
     all_xlsx = sorted(DATA_DIR.glob("*.xlsx"))
     combined_path: Path | None = next(
-        (f for f in all_xlsx if is_combined_bom_filename(f.name)), None
+        (f for f in all_xlsx
+         if f.name not in SUPPORT_FILES and is_combined_bom_filename(f.name)), None
     )
 
     if combined_path:
