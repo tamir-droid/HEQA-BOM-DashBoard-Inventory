@@ -108,6 +108,30 @@ def _split_by_system_level1(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def parse_combined_bom_bytes(
+    name: str, file_bytes: bytes
+) -> tuple[dict[str, pd.DataFrame], str | None]:
+    """Parse a combined BOM from raw bytes (used by upload-page validation).
+
+    Returns ({system_vpn: df}, None) on success, ({}, error_str) on failure.
+    Uses SYS-/BRD-/BRA- Level-1 filter so accessory rows don't break splits.
+    """
+    df = _read_flat_df(file_bytes)
+    if df is None:
+        return {}, (
+            f"Cannot find 'Level' and 'Vendor Part Number' columns in '{name}'. "
+            f"Make sure the file uses the DataSheet sheet with the correct column names."
+        )
+    result = _split_by_system_level1(df)
+    if not result:
+        sample = df[BOM_LEVEL_COL].head(10).tolist()
+        return {}, (
+            f"'{name}': no SYS-/BRD-/BRA- Level-1 rows detected. "
+            f"Level column sample: {sample}"
+        )
+    return result, None
+
+
 def load_all_boms() -> tuple[dict[str, pd.DataFrame], list[str]]:
     """Load all BOM systems from DATA_DIR.
 

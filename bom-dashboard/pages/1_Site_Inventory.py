@@ -16,7 +16,7 @@ from config import (
     PRICE_KEY_COL, PRICE_USD_COL,
     TYPE_KEY_COL, TYPE_COL,
 )
-from utils.combined_bom_parser import load_combined_bom
+from utils.bom_loader import parse_combined_bom_bytes
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -313,9 +313,10 @@ st.markdown("---")
 st.markdown(f"### 5️⃣ Combined BOM File — `{COMBINED_BOM_FILENAME}`")
 st.caption(
     f"**Alternative to individual SYS-\\*.xlsx files.** "
-    f"Upload a single Excel file (sheet: **DataSheet**) that contains all BOMs concatenated, "
-    f"with a **`System`** column identifying which system each row belongs to. "
-    f"Example System values: `SYS-BR3-LINK`, `SYS-SP1-1310-D`, etc."
+    f"Upload a single flat Excel file (sheet: **DataSheet**) with all BOMs concatenated. "
+    f"Each system must have a **Level 1** row with its VPN starting with `SYS-`, `BRD`, or `BRA` "
+    f"as a section header (e.g. `SYS-BR3-LINK`, `SYS-SP1-1-1310-D-01`). "
+    f"All rows below it (until the next system header) are its components."
 )
 
 # Show current status
@@ -334,7 +335,7 @@ combined_upload = st.file_uploader(
 
 if combined_upload is not None:
     file_bytes = combined_upload.read()
-    bom_dict, parse_err = load_combined_bom(combined_upload.name, file_bytes)
+    bom_dict, parse_err = parse_combined_bom_bytes(combined_upload.name, file_bytes)
     if parse_err:
         st.error(f"❌ Parse error: {parse_err}")
     else:
