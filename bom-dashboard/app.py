@@ -316,12 +316,12 @@ load_errors: list[str] = data.get("errors", [])
 with st.sidebar:
     st.markdown("### 🗂️ Navigation")
     st.button("🏠 Main Dashboard", use_container_width=True, disabled=True)
-    if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
-        st.switch_page("pages/1_Site_Inventory.py")
-    if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
-        st.switch_page("pages/2_System_Inventory.py")
     if st.button("🔌 BRD Assembly", use_container_width=True, key="nav_brd"):
         st.switch_page("pages/4_BRD_Assembly.py")
+    if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
+        st.switch_page("pages/2_System_Inventory.py")
+    if st.button("📤 Upload Files", use_container_width=True, key="nav_site"):
+        st.switch_page("pages/1_Site_Inventory.py")
     if st.session_state.get(SS_IS_ADMIN):
         if st.button("👥 Users", use_container_width=True, key="nav_users"):
             st.switch_page("pages/3_User_Management.py")
