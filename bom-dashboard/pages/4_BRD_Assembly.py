@@ -231,6 +231,19 @@ def _load_type_map() -> dict[str, str]:
         return {}
 
 
+def _get_brd_description(bom_files: dict, brd_vpn: str) -> str:
+    """Return the Description of the BRD assembly row from any BOM that contains it."""
+    for df in bom_files.values():
+        if BOM_VPN_COL not in df.columns or BOM_DESC_COL not in df.columns:
+            continue
+        match = df[df[BOM_VPN_COL].astype(str).str.strip() == brd_vpn]
+        if not match.empty:
+            desc = str(match.iloc[0][BOM_DESC_COL]).strip()
+            if desc and desc.lower() != "nan":
+                return desc
+    return ""
+
+
 def _get_brd_assemblies(bom_files: dict) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for bom_name, df in bom_files.items():
@@ -329,23 +342,32 @@ if not brd_assemblies:
     st.warning("⚠️ No BRD-prefixed assemblies found in the uploaded BOM files.")
     st.stop()
 
-# ── Selector + BRD Qty ─────────────────────────────────────────────────────────
-sel_col, qty_col_ui, info_col = st.columns([3, 1, 3])
+# ── Selector + BRD Qty + Description ──────────────────────────────────────────
+sel_col, qty_col_ui, desc_col = st.columns([2, 1, 4])
 with sel_col:
+    st.caption("Select BRD Assembly")
     sel_brd = st.selectbox(
         "Select BRD Assembly",
         options=sorted(brd_assemblies.keys()),
+        label_visibility="collapsed",
         help="Shows all sub-components of the selected BRD assembly.",
     )
 with qty_col_ui:
-    st.markdown('<p style="font-size:0.85rem;font-weight:600;margin-bottom:4px">BRD Qty</p>',
-                unsafe_allow_html=True)
+    st.caption("BRD Qty")
     brd_qty = st.number_input(
         "BRD Qty", min_value=1, value=1, step=1,
         label_visibility="collapsed",
         key=f"brd_qty_{sel_brd}",
         help="Number of BRD assemblies to build — multiplies all quantities and costs.",
     )
+with desc_col:
+    _brd_desc = _get_brd_description(bom_files, sel_brd)
+    if _brd_desc:
+        st.markdown(
+            f"<div style='margin-top:1.9rem;font-size:1rem;font-weight:600;color:#1a1a2e'>"
+            f"📋 {_brd_desc}</div>",
+            unsafe_allow_html=True,
+        )
 
 # ── Collect components ─────────────────────────────────────────────────────────
 all_components: list[pd.DataFrame] = []
@@ -481,19 +503,18 @@ disp["Find #"] = pd.to_numeric(disp["Find #"], errors="coerce")
 disp = disp.sort_values(["Find #", "Level"], na_position="last").reset_index(drop=True)
 
 # ── Info bar ───────────────────────────────────────────────────────────────────
-with info_col:
-    _total    = len(disp)
-    _missing  = (disp["Status"] == "🔴 Missing").sum()
-    _in_stock = (disp["Status"] == "✅ In Stock").sum()
-    _partial  = (disp["Status"] == "🟡 Partial").sum()
-    _bom_files = ", ".join(brd_assemblies.get(sel_brd, []))
-    _sub_note  = f" &nbsp;|&nbsp; 🏭 Sub: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
-    st.markdown(
-        f"**{sel_brd}** → **{_total}** components &nbsp;|&nbsp; "
-        f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}  \n"
-        f"<small>Found in: {_bom_files}</small>",
-        unsafe_allow_html=True,
-    )
+_total    = len(disp)
+_missing  = (disp["Status"] == "🔴 Missing").sum()
+_in_stock = (disp["Status"] == "✅ In Stock").sum()
+_partial  = (disp["Status"] == "🟡 Partial").sum()
+_bom_files = ", ".join(brd_assemblies.get(sel_brd, []))
+_sub_note  = f" &nbsp;|&nbsp; 🏭 Sub: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
+st.markdown(
+    f"**{sel_brd}** → **{_total}** components &nbsp;|&nbsp; "
+    f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}  \n"
+    f"<small>Found in: {_bom_files}</small>",
+    unsafe_allow_html=True,
+)
 
 st.markdown("---")
 
