@@ -1,4 +1,5 @@
 import pandas as pd
+from utils.bom_parser import get_brd_vpns
 from config import (
     BOM_VPN_COL,
     BOM_QTY_COL,
@@ -36,11 +37,13 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
     """
     parts = []
     second_mfr_parts = []
+    brd_vpn_set: set = set()
 
     for bom_name, df in bom_dfs.items():
         prod_qty = int(qty_map.get(bom_name, 0))
         if prod_qty <= 0:
             continue
+        brd_vpn_set |= get_brd_vpns(df)
 
         available_extra = [c for c in [BOM_DESC_COL, BOM_MFR_COL, BOM_MPN_COL] if c in df.columns]
         keep_cols = [BOM_VPN_COL, BOM_QTY_COL] + available_extra
@@ -99,6 +102,9 @@ def aggregate_bom(bom_dfs: dict[str, pd.DataFrame], qty_map: dict[str, int]) -> 
     for col in [BOM_DESC_COL, BOM_MFR_COL, BOM_MPN_COL]:
         if col not in grouped.columns:
             grouped[col] = ""
+
+    # Tag VPNs that are children of BRD assemblies
+    grouped["Under BRD"] = grouped[BOM_VPN_COL].isin(brd_vpn_set)
 
     # Merge alternative manufacturer data (second BOM row per VPN)
     if second_mfr_parts:
@@ -207,6 +213,7 @@ def calculate_results(
         COL_ORDER_COST,
         COL_STATUS,
         COL_BREAKDOWN,
+        "Under BRD",
     ]
     existing = [c for c in ordered_cols if c in df.columns]
     return df[existing].reset_index(drop=True)

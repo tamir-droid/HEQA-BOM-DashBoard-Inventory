@@ -34,7 +34,9 @@ TYPE_COL = "טיפוס P/R/O"
 INV_FILENAME = "Inventory.xlsx"
 PRICE_FILENAME = "item cost.xlsx"
 TYPE_FILENAME = "Buy & Make.xlsx"
-SUPPORT_FILES = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME}
+COMBINED_BOM_FILENAME = "ALL_BOMS.xlsx"
+BRD_SUB_INV_FILENAME = "BRD_Sub_Inv.xlsx"
+SUPPORT_FILES = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME, COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME}
 
 # ── Session state keys ────────────────────────────────────────────────────────
 SS_DATA = "data"

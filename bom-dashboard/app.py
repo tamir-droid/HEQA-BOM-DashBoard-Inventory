@@ -17,6 +17,7 @@ from config import (
     INV_QTY_COL,
     PRICE_FILENAME,
     TYPE_FILENAME,
+    COMBINED_BOM_FILENAME,
     TYPE_KEY_COL,
     TYPE_COL,
     SUPPORT_FILES,
@@ -33,10 +34,12 @@ from config import (
     INV_QTY_COL,
 )
 from utils.bom_parser import load_bom_file
+from utils.combined_bom_parser import load_combined_bom
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
 from utils.followup import load_followup, save_followup
+from utils.kits import load_kits, save_kits
 from utils.site_inventory import load_site_inventory
 from utils.calculator import (
     aggregate_bom,
@@ -261,6 +264,14 @@ def _load_all_local() -> dict:
             else:
                 result["types"] = df
 
+        elif name == COMBINED_BOM_FILENAME:
+            bom_dict, err = load_combined_bom(name, file_bytes)
+            if err:
+                result["errors"].append(err)
+            else:
+                result["bom"].update(bom_dict)
+                result["combined_bom_loaded"] = True
+
         else:
             df, err = load_bom_file(name, file_bytes)
             if err:
@@ -306,6 +317,8 @@ with st.sidebar:
         st.switch_page("pages/1_Site_Inventory.py")
     if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
         st.switch_page("pages/2_System_Inventory.py")
+    if st.button("🔌 BRD Assembly", use_container_width=True, key="nav_brd"):
+        st.switch_page("pages/4_BRD_Assembly.py")
     if st.session_state.get(SS_IS_ADMIN):
         if st.button("👥 Users", use_container_width=True, key="nav_users"):
             st.switch_page("pages/3_User_Management.py")
@@ -330,7 +343,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption(f"📁 `{DATA_DIR.name}/`")
-    st.caption(f"📊 BOMs: **{len(bom_files)}** file(s)")
+    _combined_loaded = data.get("combined_bom_loaded", False)
+    _bom_src = " *(combined)*" if _combined_loaded else ""
+    st.caption(f"📊 BOMs: **{len(bom_files)}** system(s){_bom_src}")
     st.caption(f"🗃️ System inventory: **{len(inventory_df):,}** rows")
     _site_count = len(st.session_state.get(SS_SITE_INV, {}))
     st.caption(f"🏭 Site inventory: **{_site_count:,}** parts")
@@ -338,10 +353,86 @@ with st.sidebar:
     st.caption(f"🏷️ Type rows: **{len(types_df):,}**")
 
 
-# ── Production Quantities (above title) ───────────────────────────────────────
+# ── Systems Quantity (above title) ───────────────────────────────────────
 # Persist quantities across page navigation
 if "_qty_persist" not in st.session_state:
     st.session_state["_qty_persist"] = {}
+
+# ── Kits Order (shown first, above quantities) ───────────────────────────
+_kits = load_kits(DATA_DIR)
+_kit_names = list(_kits.keys())
+
+st.markdown("### 📦 Kits Order")
+
+# Single row: [multiselect] [kit name input] [Save] [Load] [Rename input] [Rename] [Delete]
+_kc1, _kc2, _kc3, _kc4, _kc5, _kc6, _kc7 = st.columns([3, 2, 1.5, 1.5, 2, 1.5, 1.5])
+
+with _kc1:
+    _checked_kits = st.multiselect(
+        "Kits", options=_kit_names,
+        placeholder="Select kit(s)…",
+        label_visibility="collapsed",
+    )
+
+with _kc2:
+    _new_kit_name = st.text_input("Kit name", placeholder="New kit name…",
+                                   label_visibility="collapsed")
+
+with _kc3:
+    if st.button("💾 Save", use_container_width=True):
+        _name = _new_kit_name.strip()
+        if not _name:
+            st.warning("Enter a name.")
+        else:
+            _kits[_name] = dict(st.session_state.get("_qty_persist", {}))
+            save_kits(DATA_DIR, _kits)
+            st.success(f"✅ Saved '{_name}'")
+            st.rerun()
+
+with _kc4:
+    if st.button("⬆️ Load", use_container_width=True):
+        if not _checked_kits:
+            st.warning("Select a kit.")
+        else:
+            _combined: dict[str, int] = {}
+            for _kn in _checked_kits:
+                for bom_name, qty in _kits[_kn].items():
+                    _combined[bom_name] = _combined.get(bom_name, 0) + int(qty)
+            for bom_name, qty in _combined.items():
+                st.session_state["_qty_persist"][bom_name] = qty
+                st.session_state[f"qty_{bom_name}"] = qty
+            st.success(f"✅ Loaded: {', '.join(_checked_kits)}")
+            st.rerun()
+
+_ren_disabled = len(_checked_kits) != 1
+with _kc5:
+    _ren_val = st.text_input(
+        "Rename to",
+        value=_checked_kits[0] if not _ren_disabled else "",
+        placeholder="New name…" if not _ren_disabled else "Select 1 kit…",
+        disabled=_ren_disabled,
+        label_visibility="collapsed",
+        key="rename_kit_input",
+    )
+
+with _kc6:
+    if st.button("✏️ Rename", use_container_width=True, disabled=_ren_disabled):
+        _new_rn = _ren_val.strip()
+        if _new_rn and _new_rn != _checked_kits[0]:
+            _kits[_new_rn] = _kits.pop(_checked_kits[0])
+            save_kits(DATA_DIR, _kits)
+            st.success(f"✅ Renamed to '{_new_rn}'")
+            st.rerun()
+
+with _kc7:
+    if st.button("🗑️ Delete", use_container_width=True, disabled=not _checked_kits):
+        for _kn in _checked_kits:
+            _kits.pop(_kn, None)
+        save_kits(DATA_DIR, _kits)
+        st.success(f"🗑️ Deleted!")
+        st.rerun()
+
+st.divider()
 
 st.markdown("""<style>
 .qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
@@ -349,7 +440,7 @@ st.markdown("""<style>
 
 qty_map: dict[str, int] = {}
 if bom_files:
-    st.markdown("### ⚙️ Production Quantities")
+    st.markdown("### ⚙️ Systems Quantity")
 
     _bom_names = sorted(bom_files.keys())
     _names_1550  = sorted([n for n in _bom_names if "1550" in n])
@@ -468,7 +559,7 @@ if calc_clicked:
 results: pd.DataFrame | None = st.session_state.get(SS_RESULTS)
 
 if results is None:
-    st.info("Set production quantities in the sidebar and press **Calculate** to see results.")
+    st.info("Set systems quantity in the sidebar and press **Calculate** to see results.")
     st.stop()
 
 if results.empty:
@@ -511,14 +602,22 @@ with fc2:
 with fc3:
     search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
 
+# BRD sub-components are always excluded from main dashboard (visible only in 🔌 BRD Assembly page)
+
 # Apply filters
 df_show = results.copy()
 
 # ── Inject Order Status, PO #, Due Date, Qty Ordered from followup ────────────
 _followup = st.session_state.get(SS_FOLLOWUP, {})
-df_show["Order Status"] = df_show[BOM_VPN_COL].map(
-    lambda v: "🔵 Ordered" if v in _followup else "—"
-)
+def _order_status(v):
+    if v not in _followup:
+        return "—"
+    po = str(_followup[v].get("po", "")).strip().upper()
+    if po == "NA":
+        return "⬜ Ignored"
+    return "🔵 Ordered"
+
+df_show["Order Status"] = df_show[BOM_VPN_COL].map(_order_status)
 df_show["PO #"] = df_show[BOM_VPN_COL].map(
     lambda v: _followup[v].get("po", "") if v in _followup else ""
 )
@@ -540,6 +639,14 @@ df_show["Qty Ordered"] = pd.to_numeric(
 # Override Type to BULK for parts whose VPN starts with a known BULK prefix
 _bulk_mask = df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
 df_show.loc[_bulk_mask, "Type"] = "BULK"
+
+# ── NA logic: if PO # == "NA", zero out Order Cost and To Order ───────────────
+_na_mask = df_show["PO #"].str.strip().str.upper() == "NA"
+if _na_mask.any():
+    if COL_ORDER_COST in df_show.columns:
+        df_show.loc[_na_mask, COL_ORDER_COST] = 0
+    if COL_TO_ORDER in df_show.columns:
+        df_show.loc[_na_mask, COL_TO_ORDER] = 0
 
 if sel_type != "All" and "Type" in df_show.columns:
     df_show = df_show[df_show["Type"] == sel_type]
@@ -569,6 +676,10 @@ if search:
         if col in df_show.columns:
             mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
     df_show = df_show[mask]
+
+# Always exclude BRD sub-components from main dashboard
+if "Under BRD" in df_show.columns:
+    df_show = df_show[~df_show["Under BRD"]]
 
 _cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
 with _cap_col:
@@ -600,6 +711,8 @@ def _status_emoji(row: pd.Series) -> str:
     po = str(row.get("PO #", "")).strip().lower()
     if po == "ignore":
         return "⬜"
+    if po == "na":
+        return "🚫"  # NA = excluded from order cost, shown grey with "Ignored"
     is_ordered = row.get("Order Status", "—") == "🔵 Ordered"
     status = str(row.get(COL_STATUS, ""))
     if is_ordered and "Missing" in status:
@@ -646,7 +759,7 @@ _view_col_cfg = {
     COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
     COL_STATUS:     st.column_config.TextColumn("Status"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
-    "PO #":         st.column_config.TextColumn("PO #", help="Type 'Ignore' to exclude from calculations."),
+    "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost. Type 'Ignore' to mark as ignored."),
     "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
     "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
 }
@@ -661,7 +774,7 @@ st.caption(
 )
 
 # ── Editable results table ─────────────────────────────────────────────────────
-_editable_cols = {"PO #", "Due Date", "Qty Ordered"}
+_editable_cols = {"PO #", "Due Date", "Qty Ordered", COL_IN_STOCK}
 _disabled_cols = [c for c in df_show.columns if c not in _editable_cols]
 
 edited_df = st.data_editor(
@@ -681,7 +794,14 @@ if st.session_state.pop("_do_save_main", False):
         vpn = str(row.get("Heqa P.N", ""))
         po = str(row.get("PO #", "") or "").strip()
         _due_raw = row.get("Due Date")
-        due = _due_raw.isoformat() if isinstance(_due_raw, datetime.date) else ""
+        due = ""
+        try:
+            if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                _d = str(_due_raw)[:10]
+                datetime.date.fromisoformat(_d)   # validate
+                due = _d
+        except (ValueError, TypeError):
+            due = ""
         qty_ord = row.get("Qty Ordered")
         qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
 
@@ -705,6 +825,40 @@ if st.session_state.pop("_do_save_main", False):
 
     st.session_state[SS_FOLLOWUP] = _fup
     save_followup(DATA_DIR, _fup)
+
+    # ── Update Inventory.xlsx for any In Stock qty changes ─────────────────
+    _inv_path = DATA_DIR / "Inventory.xlsx"
+    try:
+        _inv_df = pd.read_excel(_inv_path, sheet_name="Sheet1", dtype=str) if _inv_path.exists() else pd.DataFrame()
+    except Exception:
+        _inv_df = pd.DataFrame()
+    if not _inv_df.empty and INV_KEY_COL in _inv_df.columns and INV_QTY_COL in _inv_df.columns:
+        _inv_updated = False
+        for _, _row in edited_df.iterrows():
+            _vpn = str(_row.get("Heqa P.N", "")).strip()
+            _new_qty = _row.get(COL_IN_STOCK)
+            if not _vpn or pd.isna(_new_qty):
+                continue
+            _orig_rows = df_show[df_show["Heqa P.N"] == _vpn][COL_IN_STOCK]
+            if _orig_rows.empty:
+                continue
+            _orig_val = float(_orig_rows.iloc[0]) if pd.notna(_orig_rows.iloc[0]) else 0.0
+            _new_val = float(_new_qty)
+            if _orig_val != _new_val:
+                _mask = _inv_df[INV_KEY_COL].astype(str).str.strip() == _vpn
+                if _mask.any():
+                    _inv_df.loc[_mask, INV_QTY_COL] = _new_val
+                    _inv_updated = True
+        if _inv_updated:
+            try:
+                with pd.ExcelWriter(DATA_DIR / "Inventory.xlsx", engine="openpyxl") as _w:
+                    _inv_df.to_excel(_w, sheet_name="Sheet1", index=False)
+                st.cache_data.clear()
+            except Exception as _e:
+                st.warning(f"⚠️ Could not update Inventory.xlsx: {_e}")
+
+    # Clear data_editor widget state so it reloads fresh from disk
+    st.session_state.pop("main_table", None)
     st.success("✅ Saved!")
     st.rerun()
 
@@ -956,6 +1110,9 @@ with st.expander(label, expanded=False):
 
         fo_rows = []
         for vpn, d in followup.items():
+            # Skip NA items — not shown in Already Ordered section
+            if str(d.get("po", "")).strip().upper() == "NA":
+                continue
             desc = ""
             match = results.loc[results[BOM_VPN_COL] == vpn, "Description"]
             if not match.empty:
@@ -1001,7 +1158,14 @@ with st.expander(label, expanded=False):
                         continue
                     po = str(row.get("PO #", "") or "").strip()
                     _due_raw = row.get("Due Date")
-                    due = str(_due_raw)[:10] if pd.notna(_due_raw) and _due_raw else ""
+                    due = ""
+                    try:
+                        if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                            _d = str(_due_raw)[:10]
+                            datetime.date.fromisoformat(_d)
+                            due = _d
+                    except (ValueError, TypeError):
+                        due = ""
                     qty_ord = row.get("Qty Ordered")
                     qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
                     _fup[vpn]["po"] = po
@@ -1010,6 +1174,8 @@ with st.expander(label, expanded=False):
                     _fup[vpn]["qty_ordered"] = qty_ord_val
                 st.session_state[SS_FOLLOWUP] = _fup
                 save_followup(DATA_DIR, _fup)
+                # Clear data_editor widget state so it reloads fresh from disk
+                st.session_state.pop("followup_table", None)
                 st.success("✅ Saved!")
                 st.rerun()
         with del_col:

@@ -11,11 +11,12 @@ from config import (
     DATA_DIR, LOGO_PATH,
     SS_AUTH, SS_CURRENT_USER, SS_IS_ADMIN,
     SS_DATA, SS_RESULTS,
-    INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME,
+    INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME, COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME,
     INV_KEY_COL, INV_QTY_COL,
     PRICE_KEY_COL, PRICE_USD_COL,
     TYPE_KEY_COL, TYPE_COL,
 )
+from utils.combined_bom_parser import load_combined_bom
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -40,6 +41,8 @@ with st.sidebar:
     st.button("📤 Upload Files", use_container_width=True, disabled=True)
     if st.button("📦 System Inventory", use_container_width=True, key="nav_sys"):
         st.switch_page("pages/2_System_Inventory.py")
+    if st.button("🔌 BRD Assembly", use_container_width=True, key="nav_brd"):
+        st.switch_page("pages/4_BRD_Assembly.py")
     if st.session_state.get(SS_IS_ADMIN):
         if st.button("👥 Users", use_container_width=True, key="nav_users"):
             st.switch_page("pages/3_User_Management.py")
@@ -106,9 +109,12 @@ bom_files_on_disk = [p for p in DATA_DIR.glob("*.xlsx")
 if bom_files_on_disk:
     for bf in sorted(bom_files_on_disk):
         size_kb = bf.stat().st_size / 1024
-        st.success(f"✅ `{bf.name}` — {size_kb:,.0f} KB")
+        if bf.name == COMBINED_BOM_FILENAME:
+            st.success(f"✅ `{bf.name}` *(combined)* — {size_kb:,.0f} KB")
+        else:
+            st.success(f"✅ `{bf.name}` — {size_kb:,.0f} KB")
 else:
-    st.error("❌ No BOM files uploaded yet — upload them below in section 4️⃣")
+    st.error("❌ No BOM files uploaded yet — upload them below in section 4️⃣ or 5️⃣")
 
 st.markdown("---")
 
@@ -226,9 +232,9 @@ if type_upload is not None:
 
 st.markdown("---")
 
-# ── 4. BOM Files ──────────────────────────────────────────────────────────────
-st.markdown("### 4️⃣ BOM Files — `SYS-*.xlsx`")
-st.caption("Upload one or more BOM Excel files (sheet: **DataSheet**, must have **Level** and **Vendor Part Number** columns). You can upload all 5 at once.")
+# ── 4. BOM Files — Individual SYS-*.xlsx ─────────────────────────────────────
+st.markdown("### 4️⃣ BOM Files — Individual `SYS-*.xlsx`")
+st.caption("Upload one or more BOM Excel files (sheet: **DataSheet**, must have **Level** and **Vendor Part Number** columns). You can upload all at once.")
 
 bom_uploads = st.file_uploader(
     "Choose BOM file(s)",
@@ -259,6 +265,60 @@ if bom_uploads:
                         (DATA_DIR / fname).write_bytes(fbytes)
                     _invalidate_cache()
                     st.success(f"✅ {len(valid_boms)} BOM file(s) saved. Go to Main Dashboard and press **Calculate**.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"❌ {exc}")
+
+st.markdown("---")
+
+# ── 5. Combined BOM File — ALL_BOMS.xlsx ──────────────────────────────────────
+st.markdown(f"### 5️⃣ Combined BOM File — `{COMBINED_BOM_FILENAME}`")
+st.caption(
+    f"**Alternative to individual SYS-\\*.xlsx files.** "
+    f"Upload a single Excel file (sheet: **DataSheet**) that contains all BOMs concatenated, "
+    f"with a **`System`** column identifying which system each row belongs to. "
+    f"Example System values: `SYS-BR3-LINK`, `SYS-SP1-1310-D`, etc."
+)
+
+# Show current status
+_combined_path = DATA_DIR / COMBINED_BOM_FILENAME
+if _combined_path.exists():
+    _sz = _combined_path.stat().st_size / 1024
+    st.success(f"✅ `{COMBINED_BOM_FILENAME}` already uploaded — {_sz:,.0f} KB")
+else:
+    st.info(f"ℹ️ `{COMBINED_BOM_FILENAME}` not found — upload below (or use individual BOM files above).")
+
+combined_upload = st.file_uploader(
+    f"Choose {COMBINED_BOM_FILENAME}",
+    type=["xlsx", "xls"],
+    key="combined_bom_upload",
+)
+
+if combined_upload is not None:
+    file_bytes = combined_upload.read()
+    bom_dict, parse_err = load_combined_bom(combined_upload.name, file_bytes)
+    if parse_err:
+        st.error(f"❌ Parse error: {parse_err}")
+    else:
+        _total_rows = sum(len(v) for v in bom_dict.values())
+        st.success(
+            f"✅ Parsed **{len(bom_dict)}** system(s), **{_total_rows:,}** total rows:"
+        )
+        for sys_name, sys_df in sorted(bom_dict.items()):
+            st.caption(f"  • **{sys_name}** — {len(sys_df):,} parts")
+
+        st.warning(f"⚠️ This will **overwrite** `data/{COMBINED_BOM_FILENAME}`.")
+        save_col, _ = st.columns([1, 5])
+        with save_col:
+            if st.button("💾 Save Combined BOM", type="primary", use_container_width=True, key="save_combined"):
+                try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    (DATA_DIR / COMBINED_BOM_FILENAME).write_bytes(file_bytes)
+                    _invalidate_cache()
+                    st.success(
+                        f"✅ `{COMBINED_BOM_FILENAME}` saved ({len(bom_dict)} systems, "
+                        f"{_total_rows:,} rows). Go to Main Dashboard and press **Calculate**."
+                    )
                     st.rerun()
                 except Exception as exc:
                     st.error(f"❌ {exc}")
