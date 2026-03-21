@@ -328,13 +328,22 @@ if not brd_assemblies:
     st.warning("⚠️ No BRD-prefixed assemblies found in the uploaded BOM files.")
     st.stop()
 
-# ── Selector ───────────────────────────────────────────────────────────────────
-sel_col, info_col = st.columns([3, 4])
+# ── Selector + Qty ─────────────────────────────────────────────────────────────
+sel_col, qty_col_ui, info_col = st.columns([3, 1, 3])
 with sel_col:
     sel_brd = st.selectbox(
         "Select BRD Assembly",
         options=sorted(brd_assemblies.keys()),
         help="Shows all sub-components of the selected BRD assembly.",
+    )
+with qty_col_ui:
+    st.markdown('<p style="font-size:0.85rem;font-weight:600;margin-bottom:4px">BRD Qty</p>',
+                unsafe_allow_html=True)
+    brd_qty = st.number_input(
+        "BRD Qty", min_value=1, value=1, step=1,
+        label_visibility="collapsed",
+        key=f"brd_qty_{sel_brd}",
+        help="Number of BRD assemblies to build — multiplies all quantities and costs.",
     )
 
 # ── Collect components ─────────────────────────────────────────────────────────
@@ -396,19 +405,20 @@ if "Heqa P.N" in disp.columns:
     if has_sub_inv:
         disp["Sub Stock"] = disp["Heqa P.N"].map(lambda v: sub_inv_map.get(str(v).strip(), 0))
 
-# Total BOM cost per line
+# Scale by BRD Qty
 disp["Qty (BOM)"] = pd.to_numeric(disp["Qty (BOM)"], errors="coerce").fillna(0)
-disp["Total Cost $"] = disp["Unit Price $"] * disp["Qty (BOM)"]
+disp["Qty Required"] = disp["Qty (BOM)"] * brd_qty
+disp["Total Cost $"] = disp["Unit Price $"] * disp["Qty Required"]
 
 
-# ── Status ─────────────────────────────────────────────────────────────────────
+# ── Status (based on scaled Qty Required) ──────────────────────────────────────
 def _status(row):
     try:
-        qty_bom  = float(row.get("Qty (BOM)", 0) or 0)
-        in_stock = float(row.get("In Stock",  0) or 0)
-        sub_stk  = float(row.get("Sub Stock", 0) or 0) if has_sub_inv else 0.0
+        qty_req  = float(row.get("Qty Required", 0) or 0)
+        in_stock = float(row.get("In Stock",     0) or 0)
+        sub_stk  = float(row.get("Sub Stock",    0) or 0) if has_sub_inv else 0.0
         total    = in_stock + sub_stk
-        if total >= qty_bom:
+        if total >= qty_req:
             return "✅ In Stock"
         elif total > 0:
             return "🟡 Partial"
@@ -495,14 +505,12 @@ if search_q:
     filt = filt[mask]
 
 # ── Cost metrics ───────────────────────────────────────────────────────────────
-_order_cost = filt.loc[
-    filt["Status"].isin(["🔴 Missing", "🟡 Partial"]), "Total Cost $"
-].sum(skipna=True)
+_order_cost     = filt.loc[filt["Status"].isin(["🔴 Missing", "🟡 Partial"]), "Total Cost $"].sum(skipna=True)
 _total_bom_cost = filt["Total Cost $"].sum(skipna=True)
 
-_mc1, _mc2, _mc3, _save_col = st.columns([2, 2, 2, 1])
+_mc1, _mc2, _mc3 = st.columns([2, 2, 2])
 with _mc1:
-    st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts")
+    st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts  |  BRD Qty: **×{brd_qty}**")
 with _mc2:
     st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.0f}")
 with _mc3:
@@ -518,18 +526,19 @@ def _row_color(row):
 
 # ── Column config ──────────────────────────────────────────────────────────────
 _col_cfg: dict = {
-    "Find #":        st.column_config.NumberColumn("Find #", format="%d", width="small"),
-    "Level":         st.column_config.TextColumn("Level", width="small"),
-    "Heqa P.N":      st.column_config.TextColumn("Heqa P.N"),
-    "Description":   st.column_config.TextColumn("Description", width="large"),
-    "MFR Name":      st.column_config.TextColumn("MFR Name"),
-    "MPN":           st.column_config.TextColumn("MPN"),
-    "Qty (BOM)":     st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
-    "In Stock":      st.column_config.NumberColumn("In Stock", format="%g", width="small"),
-    "Unit Price $":  st.column_config.NumberColumn("Unit Price $", format="$%.2f"),
-    "Total Cost $":  st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
-    "Part Type":     st.column_config.TextColumn("Type", width="small"),
-    "Status":        st.column_config.TextColumn("Status"),
+    "Find #":         st.column_config.NumberColumn("Find #", format="%d", width="small"),
+    "Level":          st.column_config.TextColumn("Level", width="small"),
+    "Heqa P.N":       st.column_config.TextColumn("Heqa P.N"),
+    "Description":    st.column_config.TextColumn("Description", width="large"),
+    "MFR Name":       st.column_config.TextColumn("MFR Name"),
+    "MPN":            st.column_config.TextColumn("MPN"),
+    "Part Type":      st.column_config.TextColumn("Type", width="small"),
+    "Qty (BOM)":      st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
+    "Qty Required":   st.column_config.NumberColumn(f"Qty ×{brd_qty}", format="%g", width="small"),
+    "In Stock":       st.column_config.NumberColumn("In Stock", format="%g", width="small"),
+    "Unit Price $":   st.column_config.NumberColumn("Unit Price $", format="$%.2f"),
+    "Total Cost $":   st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
+    "Status":         st.column_config.TextColumn("Status"),
 }
 if has_sub_inv:
     _col_cfg["Sub Stock"] = st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small")
@@ -537,7 +546,7 @@ if has_sub_inv:
 # Column display order
 _display_order = [
     "Find #", "Level", "Heqa P.N", "Description", "MFR Name", "MPN",
-    "Part Type", "Qty (BOM)", "In Stock",
+    "Part Type", "Qty (BOM)", "Qty Required", "In Stock",
 ]
 if has_sub_inv:
     _display_order.append("Sub Stock")
