@@ -80,9 +80,12 @@ def _load_all_boms() -> dict[str, pd.DataFrame]:
     if not DATA_DIR.exists():
         return bom_files
     for f in DATA_DIR.glob("SYS-*.xlsx"):
-        df, err = load_bom_file(f)
-        if err is None and df is not None and not df.empty:
-            bom_files[f.name] = df
+        try:
+            df, err = load_bom_file(f.name, f.read_bytes())
+            if err is None and df is not None and not df.empty:
+                bom_files[f.name] = df
+        except Exception:
+            continue
     return bom_files
 
 
