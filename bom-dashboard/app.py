@@ -272,6 +272,9 @@ def _load_all_local() -> dict:
                 result["bom"].update(bom_dict)
                 result["combined_bom_loaded"] = True
 
+        elif name in SUPPORT_FILES:
+            pass  # known support file handled elsewhere (e.g. BRD_Sub_Inv.xlsx)
+
         else:
             df, err = load_bom_file(name, file_bytes)
             if err:
