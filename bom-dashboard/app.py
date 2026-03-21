@@ -560,6 +560,92 @@ c6.metric("Order Cost $", f"${kpis['order_cost']:,.0f}")
 
 st.markdown("---")
 
+# ── Cost Breakdown by System ───────────────────────────────────────────────────
+with st.expander("💰 Cost Breakdown by System", expanded=True):
+    # Build price lookup from prices_df
+    _pm: dict[str, float] = {}
+    if not prices_df.empty and PRICE_KEY_COL in prices_df.columns:
+        from config import PRICE_KEY_COL as _PRICE_KEY, PRICE_USD_COL as _PRICE_USD
+        for _, _pr in prices_df.iterrows():
+            _k = str(_pr[_PRICE_KEY]).strip()
+            _v = pd.to_numeric(_pr.get(_PRICE_USD), errors="coerce")
+            if _k and _k.lower() != "nan" and pd.notna(_v) and _v > 0:
+                _pm[_k] = float(_v)
+
+    _cb_rows: list[dict] = []
+    _grand_total = 0.0
+
+    for _sys in sorted(qty_map.keys()):
+        _sq = qty_map[_sys]
+        if _sq <= 0 or _sys not in bom_files:
+            continue
+        _df_s = bom_files[_sys]
+        if BOM_VPN_COL not in _df_s.columns or BOM_QTY_COL not in _df_s.columns:
+            continue
+
+        # System total cost (all components)
+        _sys_total = 0.0
+        for _, _r in _df_s.iterrows():
+            _v = str(_r.get(BOM_VPN_COL, "")).strip()
+            if not _v or _v.lower() == "nan":
+                continue
+            _bq = float(pd.to_numeric(_r.get(BOM_QTY_COL, 0), errors="coerce") or 0)
+            _sys_total += _pm.get(_v, 0.0) * _bq * _sq
+        _grand_total += _sys_total
+
+        # BRD assemblies in this system
+        _brds = _df_s[_df_s[BOM_VPN_COL].astype(str).str.upper().str.startswith("BRD")]
+        for _, _r in _brds.iterrows():
+            _bvpn = str(_r[BOM_VPN_COL]).strip()
+            _bq   = float(pd.to_numeric(_r.get(BOM_QTY_COL, 0), errors="coerce") or 0)
+            _tq   = _bq * _sq
+            _up   = _pm.get(_bvpn, 0.0)
+            _cb_rows.append({
+                "System":         _short(_sys),
+                "Sys Qty":        _sq,
+                "BRD Assembly":   _bvpn,
+                "BRD Qty/Sys":    int(_bq),
+                "Total BRD Qty":  int(_tq),
+                "Unit Price $":   _up   if _up   > 0 else None,
+                "BRD Cost $":     _up * _tq if _up > 0 else None,
+                "System Total $": None,
+            })
+
+        # System subtotal row
+        _cb_rows.append({
+            "System":         _short(_sys),
+            "Sys Qty":        _sq,
+            "BRD Assembly":   "—",
+            "BRD Qty/Sys":    None,
+            "Total BRD Qty":  None,
+            "Unit Price $":   None,
+            "BRD Cost $":     None,
+            "System Total $": round(_sys_total, 2) if _sys_total > 0 else None,
+        })
+
+    if _cb_rows:
+        _cb_df = pd.DataFrame(_cb_rows)
+        st.dataframe(
+            _cb_df,
+            column_config={
+                "System":         st.column_config.TextColumn("System"),
+                "Sys Qty":        st.column_config.NumberColumn("Sys Qty",       format="%d"),
+                "BRD Assembly":   st.column_config.TextColumn("BRD Assembly"),
+                "BRD Qty/Sys":    st.column_config.NumberColumn("BRD Qty/Sys",   format="%d"),
+                "Total BRD Qty":  st.column_config.NumberColumn("Total BRD Qty", format="%d"),
+                "Unit Price $":   st.column_config.NumberColumn("Unit Price $",  format="$%.2f"),
+                "BRD Cost $":     st.column_config.NumberColumn("BRD Cost $",    format="$%.0f"),
+                "System Total $": st.column_config.NumberColumn("System Total $",format="$%.0f"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.metric("💰 Grand Total — All Systems", f"${_grand_total:,.0f}")
+    else:
+        st.info("No systems selected with quantity > 0.")
+
+st.markdown("---")
+
 # ── Filters ───────────────────────────────────────────────────────────────────
 st.markdown("### 🔍 Filters")
 fc1, fc2, fc3 = st.columns([2, 2, 3])
