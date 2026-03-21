@@ -142,7 +142,7 @@ if LOGO_PATH.exists():
         st.image(LOGO_PATH.read_bytes(), width=180)
     with title_col:
         st.markdown("# 🔌 BRD Assembly Viewer")
-        st.caption("Select a BRD assembly to view all sub-components as defined in the BOM hierarchy.")
+        st.caption("Select a BRD/BRA assembly to view all sub-components as defined in the BOM hierarchy.")
 else:
     st.title("🔌 BRD Assembly Viewer")
 
@@ -250,7 +250,7 @@ def _get_brd_assemblies(bom_files: dict) -> dict[str, list[str]]:
         if BOM_VPN_COL not in df.columns:
             continue
         for vpn in df[BOM_VPN_COL].astype(str).str.strip().unique():
-            if vpn.upper().startswith("BRD"):
+            if vpn.upper().startswith(("BRD", "BRA")):
                 result.setdefault(vpn, [])
                 if bom_name not in result[vpn]:
                     result[vpn].append(bom_name)
@@ -339,7 +339,7 @@ if not bom_files:
 brd_assemblies = _get_brd_assemblies(bom_files)
 
 if not brd_assemblies:
-    st.warning("⚠️ No BRD-prefixed assemblies found in the uploaded BOM files.")
+    st.warning("⚠️ No BRD/BRA-prefixed assemblies found in the uploaded BOM files.")
     st.stop()
 
 # ── Selector + BRD Qty + Description ──────────────────────────────────────────
