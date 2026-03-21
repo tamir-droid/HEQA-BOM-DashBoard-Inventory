@@ -149,7 +149,7 @@ def load_all_boms() -> tuple[dict[str, pd.DataFrame], list[str]]:
 
     all_xlsx = sorted(DATA_DIR.glob("*.xlsx"))
 
-    # Find combined BOM (exclude support files to avoid ALL_BOMS.xlsx clash)
+    # Find combined BOM file (support files like Inventory.xlsx are excluded)
     combined_path: Path | None = next(
         (f for f in all_xlsx
          if f.name not in SUPPORT_FILES and is_combined_bom_filename(f.name)), None
@@ -180,6 +180,8 @@ def load_all_boms() -> tuple[dict[str, pd.DataFrame], list[str]]:
         # ── Individual BOM files ──────────────────────────────────────────────
         for f in all_xlsx:
             if f.name in SUPPORT_FILES:
+                continue
+            if is_combined_bom_filename(f.name):  # skip combined BOM files
                 continue
             try:
                 file_bytes = f.read_bytes()
