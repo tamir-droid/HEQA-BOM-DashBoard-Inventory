@@ -429,30 +429,6 @@ if bom_files:
                     .replace("SYS-SP1-1-", "SP1-")
                     .replace("SYS-", ""))
 
-    # ── Quick Select ──────────────────────────────────────────────────────────
-    _qs_options = ["— select one —"] + [_short(n) for n in _bom_names]
-    _qs_col, _qs_btn_col, _clr_col = st.columns([3, 1.2, 1])
-    with _qs_col:
-        _qs_sel = st.selectbox(
-            "Quick select", options=_qs_options,
-            label_visibility="collapsed",
-            key="qs_system",
-        )
-    with _qs_btn_col:
-        if st.button("☑️ Select Only This", use_container_width=True,
-                     disabled=_qs_sel == "— select one —"):
-            _target = _bom_names[_qs_options.index(_qs_sel) - 1]
-            for _n in _bom_names:
-                st.session_state["_qty_persist"][_n] = 1 if _n == _target else 0
-                st.session_state[f"qty_{_n}"] = 1 if _n == _target else 0
-            st.rerun()
-    with _clr_col:
-        if st.button("✖️ Clear All", use_container_width=True):
-            for _n in _bom_names:
-                st.session_state["_qty_persist"][_n] = 0
-                st.session_state[f"qty_{_n}"] = 0
-            st.rerun()
-    # ─────────────────────────────────────────────────────────────────────────
     _names_1550  = sorted([n for n in _bom_names if "1550" in n])
     _names_1310  = sorted([n for n in _bom_names if "1310" in n])
     _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
