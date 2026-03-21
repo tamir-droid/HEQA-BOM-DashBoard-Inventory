@@ -536,6 +536,18 @@ if bom_files:
 else:
     qty_map = {}
 
+# ── DEBUG (temporary) ─────────────────────────────────────────────────────────
+with st.expander("🔍 Debug: file loading info", expanded=False):
+    st.write("**DATA_DIR:**", str(DATA_DIR))
+    _dbg_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
+    st.write("**Files found:**", [f.name for f in _dbg_files])
+    st.write("**BOM keys loaded:**", list(bom_files.keys()))
+    st.write("**Errors:**", load_errors)
+    from utils.combined_bom_parser import is_combined_bom_filename as _icbf
+    for _f in _dbg_files:
+        st.write(f"  `{_f.name}` → is_combined={_icbf(_f.name)}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 st.markdown("---")
 
 # ── Header ────────────────────────────────────────────────────────────────────
