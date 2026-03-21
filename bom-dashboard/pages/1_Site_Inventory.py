@@ -118,6 +118,44 @@ else:
 
 st.markdown("---")
 
+# ── 🗑️ Delete Files ───────────────────────────────────────────────────────────
+st.markdown("### 🗑️ Delete Files")
+st.caption("Select one or more files to permanently remove from the data folder.")
+
+_all_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
+if _all_files:
+    _file_options = {p.name: p for p in _all_files}
+    _to_delete = st.multiselect(
+        "Select files to delete",
+        options=list(_file_options.keys()),
+        placeholder="Choose file(s)…",
+        label_visibility="collapsed",
+    )
+    if _to_delete:
+        st.warning(f"⚠️ This will **permanently delete** {len(_to_delete)} file(s): {', '.join(f'`{f}`' for f in _to_delete)}")
+        _del_col, _ = st.columns([1, 5])
+        with _del_col:
+            if st.button(f"🗑️ Delete {len(_to_delete)} file(s)", type="primary",
+                         use_container_width=True, key="do_delete"):
+                _deleted, _errors = [], []
+                for fname in _to_delete:
+                    try:
+                        _file_options[fname].unlink()
+                        _deleted.append(fname)
+                    except Exception as exc:
+                        _errors.append(f"`{fname}`: {exc}")
+                _invalidate_cache()
+                if _deleted:
+                    st.success(f"✅ Deleted: {', '.join(f'`{f}`' for f in _deleted)}")
+                if _errors:
+                    for e in _errors:
+                        st.error(f"❌ {e}")
+                st.rerun()
+else:
+    st.info("No files in data folder.")
+
+st.markdown("---")
+
 # ── Upload sections ───────────────────────────────────────────────────────────
 
 # ── 1. Inventory.xlsx ─────────────────────────────────────────────────────────
