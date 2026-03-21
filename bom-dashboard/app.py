@@ -309,14 +309,12 @@ def _do_refresh():
 
 
 # ── Session state init ────────────────────────────────────────────────────────
-if SS_DATA not in st.session_state:
-    st.session_state[SS_DATA] = _load_all_local()
+# Always reload from disk (no caching while debugging)
+st.session_state[SS_DATA] = _load_all_local()
 
 # Always reload followup from disk so all users see latest PO changes immediately
 st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
-
-if SS_SITE_INV not in st.session_state:
-    st.session_state[SS_SITE_INV] = load_site_inventory(DATA_DIR)
+st.session_state[SS_SITE_INV] = load_site_inventory(DATA_DIR)
 
 data = st.session_state[SS_DATA]
 bom_files: dict[str, pd.DataFrame] = data.get("bom", {})
