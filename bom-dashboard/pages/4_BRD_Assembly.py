@@ -23,10 +23,9 @@ from config import (
     INV_FILENAME, INV_KEY_COL, INV_QTY_COL,
     PRICE_FILENAME, PRICE_KEY_COL, PRICE_USD_COL,
     TYPE_FILENAME, TYPE_KEY_COL, TYPE_COL,
-    COMBINED_BOM_FILENAME, BRD_SUB_INV_FILENAME, SUPPORT_FILES,
+    BRD_SUB_INV_FILENAME, SUPPORT_FILES,
 )
-from utils.bom_parser import load_bom_file
-from utils.combined_bom_parser import load_combined_bom, is_combined_bom_filename
+from utils.bom_loader import load_all_boms
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
 from utils.followup import load_followup, save_followup
@@ -186,36 +185,8 @@ def _parse_date(s):
 
 @st.cache_data(show_spinner=False)
 def _load_all_boms() -> dict[str, pd.DataFrame]:
-    bom_files: dict[str, pd.DataFrame] = {}
-    if not DATA_DIR.exists():
-        return bom_files
-
-    all_names = [f.name for f in DATA_DIR.glob("*.xlsx")]
-    has_combined = any(is_combined_bom_filename(n) for n in all_names)
-
-    for f in sorted(DATA_DIR.glob("*.xlsx")):
-        if f.name in SUPPORT_FILES:
-            continue
-        # Skip individual BOM files when a combined BOM file is present
-        if has_combined and not is_combined_bom_filename(f.name):
-            continue
-        try:
-            file_bytes = f.read_bytes()
-        except Exception:
-            continue
-        try:
-            if is_combined_bom_filename(f.name):
-                bom_dict, err = load_combined_bom(f.name, file_bytes)
-                if err is None and bom_dict:
-                    bom_files.update(bom_dict)
-            else:
-                df, err = load_bom_file(f.name, file_bytes)
-                if err is None and df is not None and not df.empty:
-                    bom_files[f.name] = df
-        except Exception:
-            continue
-
-    return bom_files
+    bom_dict, _ = load_all_boms()
+    return bom_dict
 
 
 @st.cache_data(show_spinner=False)

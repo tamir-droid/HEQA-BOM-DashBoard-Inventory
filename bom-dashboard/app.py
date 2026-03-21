@@ -33,8 +33,8 @@ from config import (
     INV_KEY_COL,
     INV_QTY_COL,
 )
-from utils.bom_parser import load_bom_file
-from utils.combined_bom_parser import load_combined_bom, is_combined_bom_filename
+from utils.bom_loader import load_all_boms
+from utils.combined_bom_parser import is_combined_bom_filename
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -224,93 +224,55 @@ if st.session_state.get(SS_MUST_CHANGE_PW):
     st.stop()
 
 
-# ── Data loading (cached) ─────────────────────────────────────────────────────
-def _load_all_local() -> dict:  # cache temporarily removed for debugging
+# ── Data loading ──────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _load_all_local() -> dict:
     """Read every xlsx in DATA_DIR. Returns dict with bom, inventory, prices, types, errors."""
     result: dict = {"bom": {}, "inventory": None, "prices": None, "types": None, "errors": []}
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    all_paths = sorted(DATA_DIR.glob("*.xlsx"))
-    if not all_paths:
+    if not any(DATA_DIR.glob("*.xlsx")):
         result["errors"].append("No data files uploaded yet — go to 📤 Upload Files to add your Excel files.")
         return result
 
-    # ── Decide upfront which files to read ────────────────────────────────────
-    # If a combined BOM filename exists, skip all individual BOM files entirely
-    # (avoids permission errors on stale files and prevents duplicate systems).
-    all_names = [p.name for p in all_paths]
-    has_combined = any(is_combined_bom_filename(n) for n in all_names)
+    # ── Support files (inventory, prices, types) ──────────────────────────────
+    for _fname, _loader, _key in [
+        (INV_FILENAME,   load_inventory, "inventory"),
+        (PRICE_FILENAME, load_prices,    "prices"),
+        (TYPE_FILENAME,  load_types,     "types"),
+    ]:
+        _p = DATA_DIR / _fname
+        if _p.exists():
+            try:
+                _df, _err = _loader(_p.read_bytes())
+                if _err:
+                    result["errors"].append(_err)
+                else:
+                    result[_key] = _df
+            except Exception as exc:
+                result["errors"].append(f"Cannot read '{_fname}': {exc}")
 
-    _SUPPORT = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME} | SUPPORT_FILES
-
-    def _should_read(name: str) -> bool:
-        if name in _SUPPORT:
-            return True
-        if is_combined_bom_filename(name):
-            return True
-        # Individual BOM files — only read when no combined BOM present
-        return not has_combined
-
-    # ── Read only the files we need ────────────────────────────────────────────
-    file_map: dict[str, bytes] = {}
-    for path in all_paths:
-        if not _should_read(path.name):
-            continue
-        try:
-            file_map[path.name] = path.read_bytes()
-        except Exception as exc:
-            result["errors"].append(f"Cannot read '{path.name}': {exc}")
-
-    # ── Process each file ─────────────────────────────────────────────────────
-    individual_bom_names: list[str] = []
-    for name, file_bytes in file_map.items():
-        if name == INV_FILENAME:
-            df, err = load_inventory(file_bytes)
-            if err: result["errors"].append(err)
-            else: result["inventory"] = df
-
-        elif name == PRICE_FILENAME:
-            df, err = load_prices(file_bytes)
-            if err: result["errors"].append(err)
-            else: result["prices"] = df
-
-        elif name == TYPE_FILENAME:
-            df, err = load_types(file_bytes)
-            if err: result["errors"].append(err)
-            else: result["types"] = df
-
-        elif name in SUPPORT_FILES:
-            pass  # BRD_Sub_Inv.xlsx etc.
-
-        elif is_combined_bom_filename(name):
-            bom_dict, err = load_combined_bom(name, file_bytes)
-            if err:
-                result["errors"].append(err)
-            else:
-                result["bom"].update(bom_dict)
-                result["combined_bom_loaded"] = True
-
-        else:
-            individual_bom_names.append(name)
-
-    # ── Individual BOMs — fallback when no combined BOM ───────────────────────
-    if not result.get("combined_bom_loaded"):
-        for name in individual_bom_names:
-            df, err = load_bom_file(name, file_map[name])
-            if err: result["errors"].append(err)
-            else: result["bom"][name] = df
+    # ── BOM files (combined or individual) ────────────────────────────────────
+    _bom_dict, _bom_errors = load_all_boms()
+    result["bom"].update(_bom_dict)
+    result["errors"].extend(_bom_errors)
+    if _bom_dict:
+        result["combined_bom_loaded"] = any(
+            is_combined_bom_filename(f.name) for f in DATA_DIR.glob("*.xlsx")
+        )
 
     return result
 
 
 def _do_refresh():
+    st.cache_data.clear()
     st.session_state.pop(SS_DATA, None)
     st.session_state.pop(SS_RESULTS, None)
 
 
 # ── Session state init ────────────────────────────────────────────────────────
-# Always reload from disk (no caching while debugging)
-st.session_state[SS_DATA] = _load_all_local()
+if SS_DATA not in st.session_state:
+    st.session_state[SS_DATA] = _load_all_local()
 
 # Always reload followup from disk so all users see latest PO changes immediately
 st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
@@ -531,19 +493,6 @@ if bom_files:
             _qty_input(_col, _n)
 else:
     qty_map = {}
-
-# ── DEBUG (temporary) ─────────────────────────────────────────────────────────
-_dbg_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
-_dbg_lines = [
-    f"DATA_DIR: {DATA_DIR}",
-    f"Files: {[f.name for f in _dbg_files]}",
-    f"BOM keys: {list(bom_files.keys())}",
-    f"Errors: {load_errors}",
-]
-for _f in _dbg_files:
-    _dbg_lines.append(f"  {_f.name} → is_combined={is_combined_bom_filename(_f.name)}")
-st.info("\n\n".join(_dbg_lines))
-# ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("---")
 
