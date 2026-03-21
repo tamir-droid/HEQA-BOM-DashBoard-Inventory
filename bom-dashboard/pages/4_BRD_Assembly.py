@@ -187,12 +187,17 @@ def _parse_date(s):
 @st.cache_data(show_spinner=False)
 def _load_all_boms() -> dict[str, pd.DataFrame]:
     bom_files: dict[str, pd.DataFrame] = {}
-    combined_loaded = False
     if not DATA_DIR.exists():
         return bom_files
 
+    all_names = [f.name for f in DATA_DIR.glob("*.xlsx")]
+    has_combined = any(is_combined_bom_filename(n) for n in all_names)
+
     for f in sorted(DATA_DIR.glob("*.xlsx")):
         if f.name in SUPPORT_FILES:
+            continue
+        # Skip individual BOM files when a combined BOM file is present
+        if has_combined and not is_combined_bom_filename(f.name):
             continue
         try:
             file_bytes = f.read_bytes()
@@ -203,8 +208,7 @@ def _load_all_boms() -> dict[str, pd.DataFrame]:
                 bom_dict, err = load_combined_bom(f.name, file_bytes)
                 if err is None and bom_dict:
                     bom_files.update(bom_dict)
-                    combined_loaded = True
-            elif not combined_loaded:
+            else:
                 df, err = load_bom_file(f.name, file_bytes)
                 if err is None and df is not None and not df.empty:
                     bom_files[f.name] = df

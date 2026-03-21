@@ -236,15 +236,33 @@ def _load_all_local() -> dict:
         result["errors"].append("No data files uploaded yet — go to 📤 Upload Files to add your Excel files.")
         return result
 
-    # ── Read all file bytes once ───────────────────────────────────────────────
+    # ── Decide upfront which files to read ────────────────────────────────────
+    # If a combined BOM filename exists, skip all individual BOM files entirely
+    # (avoids permission errors on stale files and prevents duplicate systems).
+    all_names = [p.name for p in all_paths]
+    has_combined = any(is_combined_bom_filename(n) for n in all_names)
+
+    _SUPPORT = {INV_FILENAME, PRICE_FILENAME, TYPE_FILENAME} | SUPPORT_FILES
+
+    def _should_read(name: str) -> bool:
+        if name in _SUPPORT:
+            return True
+        if is_combined_bom_filename(name):
+            return True
+        # Individual BOM files — only read when no combined BOM present
+        return not has_combined
+
+    # ── Read only the files we need ────────────────────────────────────────────
     file_map: dict[str, bytes] = {}
     for path in all_paths:
+        if not _should_read(path.name):
+            continue
         try:
             file_map[path.name] = path.read_bytes()
         except Exception as exc:
             result["errors"].append(f"Cannot read '{path.name}': {exc}")
 
-    # ── Pass 1: support files (inventory, prices, types) ──────────────────────
+    # ── Process each file ─────────────────────────────────────────────────────
     individual_bom_names: list[str] = []
     for name, file_bytes in file_map.items():
         if name == INV_FILENAME:
@@ -266,7 +284,6 @@ def _load_all_local() -> dict:
             pass  # BRD_Sub_Inv.xlsx etc.
 
         elif is_combined_bom_filename(name):
-            # ── Combined BOM (e.g. "All Boms.xlsx") ──────────────────────────
             bom_dict, err = load_combined_bom(name, file_bytes)
             if err:
                 result["errors"].append(err)
@@ -277,11 +294,10 @@ def _load_all_local() -> dict:
         else:
             individual_bom_names.append(name)
 
-    # ── Pass 2: individual BOM files — only when NO combined BOM was loaded ───
+    # ── Individual BOMs — fallback when no combined BOM ───────────────────────
     if not result.get("combined_bom_loaded"):
         for name in individual_bom_names:
-            file_bytes = file_map[name]
-            df, err = load_bom_file(name, file_bytes)
+            df, err = load_bom_file(name, file_map[name])
             if err: result["errors"].append(err)
             else: result["bom"][name] = df
 
