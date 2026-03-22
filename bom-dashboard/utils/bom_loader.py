@@ -87,10 +87,21 @@ def _split_by_system_level1(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         df[BOM_QTY_COL] = 0
     df[BOM_VPN_COL] = df[BOM_VPN_COL].astype(str).str.strip()
 
+    # Count how many times each SYS-/BRD-/BRA- VPN appears at Level-1.
+    # Main system headers appear exactly ONCE; sub-assemblies appear twice
+    # (once inside their parent BOM section, once as their own header row).
+    from collections import Counter as _Counter
+    _l1_vpns = [
+        df.at[i, BOM_VPN_COL]
+        for i, v in enumerate(df[BOM_LEVEL_COL])
+        if _is_level1(v) and _is_system_vpn(df.at[i, BOM_VPN_COL])
+    ]
+    _system_vpns = {vpn for vpn, cnt in _Counter(_l1_vpns).items() if cnt == 1}
+
     # Find positions of system-header Level-1 rows only
     level1_pos = [
         i for i, v in enumerate(df[BOM_LEVEL_COL])
-        if _is_level1(v) and _is_system_vpn(df.at[i, BOM_VPN_COL])
+        if _is_level1(v) and df.at[i, BOM_VPN_COL] in _system_vpns
     ]
 
     result: dict[str, pd.DataFrame] = {}

@@ -429,11 +429,13 @@ if bom_files:
                     .replace("SYS-SP1-1-", "SP1-")
                     .replace("SYS-", ""))
 
-    _names_1550  = sorted([n for n in _bom_names if "1550" in n])
-    _names_1310  = sorted([n for n in _bom_names if "1310" in n])
+    # Categories are mutually exclusive — a name lands in the first bucket it matches
     _names_br3   = sorted([n for n in _bom_names if "BR3" in n.upper()])
-    _names_other = [n for n in _bom_names
-                    if n not in _names_1550 + _names_1310 + _names_br3]
+    _br3_set     = set(_names_br3)
+    _names_1550  = sorted([n for n in _bom_names if "1550" in n and n not in _br3_set])
+    _names_1310  = sorted([n for n in _bom_names if "1310" in n and n not in _br3_set])
+    _assigned    = _br3_set | set(_names_1550) | set(_names_1310)
+    _names_other = [n for n in _bom_names if n not in _assigned]
 
     def _qty_input(col, bom_name):
         with col:
