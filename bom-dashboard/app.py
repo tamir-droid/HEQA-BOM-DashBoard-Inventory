@@ -558,7 +558,7 @@ c2.metric("✅ In Stock", f"{kpis['in_stock_count']:,}")
 c3.metric("🔴 Missing", f"{kpis['missing_count']:,}")
 c4.metric("Availability", f"{kpis['availability_pct']:.1f}%")
 c5.metric("⚠️ No Price", f"{kpis['no_price_count']:,}")
-c6.metric("Order Cost $", f"${kpis['order_cost']:,.0f}")
+c6.metric("Order Cost $", f"${kpis['order_cost']:,.4f}")
 
 st.markdown("---")
 
@@ -670,11 +670,11 @@ with _cap_col:
 with _cost_col1:
     if COL_ORDER_COST in df_show.columns:
         _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
-        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.0f}")
+        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.4f}")
 with _cost_col2:
     if COL_TOTAL_COST in df_show.columns:
         _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
-        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.0f}")
+        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.4f}")
 with _save_btn_col:
     st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
     if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
@@ -737,9 +737,9 @@ _view_col_cfg = {
     COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
     COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
     COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
-    COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.2f"),
-    COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.0f"),
-    COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.0f"),
+    COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.4f"),
+    COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
+    COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.4f"),
     COL_STATUS:     st.column_config.TextColumn("Status"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
     "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost. Type 'Ignore' to mark as ignored."),
