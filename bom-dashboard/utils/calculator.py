@@ -6,6 +6,7 @@ from config import (
     BOM_DESC_COL,
     BOM_MFR_COL,
     BOM_MPN_COL,
+    BOM_LEVEL_COL,
     INV_KEY_COL,
     INV_QTY_COL,
     PRICE_KEY_COL,
@@ -259,17 +260,59 @@ def get_brd_order_summary(
     inventory_df,
     price_df,
 ):
-    """Calculate per-BRD order cost (missing parts only).
+    """Calculate per-BRD order cost (missing parts only) and total BOM cost.
 
-    For each selected SYS-* system, finds BRD rows in its BOM, then uses
-    the BRD sub-BOM from bom_dfs (if present) to calculate order cost
-    of missing components.
+    Walks the level hierarchy inside each SYS-* BOM to extract components
+    that sit under each BRD row — same approach as the BRD Assembly page.
+    No separate BRD sub-BOM files are required.
 
     Returns a DataFrame with columns:
-        System, BRD P/N, Description, Qty/System, Total BRD Qty,
-        Order Cost $, Note
+        BRD P/N, Description, Systems, Total BRD Qty,
+        Order Cost $, Total BOM Cost $, Note
     """
     import pandas as _pd
+
+    def _parse_level(val) -> int:
+        s = str(val).strip().lstrip(".")
+        try:
+            return int(float(s))
+        except (ValueError, TypeError):
+            return 999
+
+    def _extract_brd_components(sys_df, brd_vpn: str):
+        """Return all rows nested under brd_vpn in sys_df (by level hierarchy)."""
+        rows = []
+        in_brd = False
+        brd_level = None
+        for _, row in sys_df.iterrows():
+            level = _parse_level(row.get(BOM_LEVEL_COL, 999))
+            vpn = str(row.get(BOM_VPN_COL, "")).strip()
+            if vpn == brd_vpn:
+                in_brd = True
+                brd_level = level
+                continue
+            if in_brd:
+                if not vpn or vpn.lower() == "nan":
+                    continue
+                if brd_level is not None and level <= brd_level:
+                    break
+                rows.append(row)
+        return _pd.DataFrame(rows).reset_index(drop=True) if rows else _pd.DataFrame()
+
+    # ── Build fast lookups ────────────────────────────────────────────────────
+    inv_lookup: dict = {}
+    if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
+        inv_lookup = (
+            inventory_df.groupby(INV_KEY_COL)[INV_QTY_COL].sum().to_dict()
+        )
+
+    price_lookup: dict = {}
+    if not price_df.empty and PRICE_KEY_COL in price_df.columns:
+        price_lookup = (
+            price_df.drop_duplicates(subset=PRICE_KEY_COL)
+            .set_index(PRICE_KEY_COL)[PRICE_USD_COL]
+            .to_dict()
+        )
 
     rows = []
 
@@ -283,12 +326,12 @@ def get_brd_order_summary(
         brd_mask = (
             sys_df[BOM_VPN_COL].astype(str).str.strip().str.upper().str.startswith("BRD")
         )
-        brd_rows = sys_df[brd_mask]
+        brd_rows_in_sys = sys_df[brd_mask]
 
         seen_brd: set = set()
-        for _, brd_row in brd_rows.iterrows():
+        for _, brd_row in brd_rows_in_sys.iterrows():
             brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
-            # Only include BRD VPNs with exactly 6 characters after "BRD"
+            # Only BRD VPNs with exactly 6 characters after "BRD" (e.g. BRD100700)
             if len(brd_vpn) != 9:
                 continue
             if brd_vpn in seen_brd:
@@ -298,38 +341,42 @@ def get_brd_order_summary(
             brd_qty_in_sys = float(
                 _pd.to_numeric(brd_row.get(BOM_QTY_COL, 1), errors="coerce") or 1
             )
-            total_brd_qty = int(brd_qty_in_sys * sys_qty)
+            total_brd_qty = brd_qty_in_sys * sys_qty
             brd_desc = str(brd_row.get(BOM_DESC_COL, ""))
 
-            brd_sub_bom = bom_dfs.get(brd_vpn)
+            comp_df = _extract_brd_components(sys_df, brd_vpn)
 
-            if brd_sub_bom is not None and not brd_sub_bom.empty:
-                required = aggregate_bom(
-                    {brd_vpn: brd_sub_bom},
-                    {brd_vpn: total_brd_qty},
+            if comp_df.empty:
+                rows.append({
+                    "System": sys_name,
+                    "BRD P/N": brd_vpn,
+                    "Description": brd_desc,
+                    "Qty/System": brd_qty_in_sys,
+                    "Total BRD Qty": total_brd_qty,
+                    "Order Cost $": 0.0,
+                    "Total BOM Cost $": 0.0,
+                    "Note": "⚠️ No components found",
+                })
+                continue
+
+            brd_order_cost = 0.0
+            brd_total_cost = 0.0
+
+            for _, comp in comp_df.iterrows():
+                comp_vpn = str(comp.get(BOM_VPN_COL, "")).strip()
+                if not comp_vpn or comp_vpn.lower() == "nan":
+                    continue
+                comp_qty = float(
+                    _pd.to_numeric(comp.get(BOM_QTY_COL, 0), errors="coerce") or 0
                 )
-                if required.empty:
-                    brd_order_cost = 0.0
-                    brd_total_cost = 0.0
-                else:
-                    calc = calculate_results(
-                        required, inventory_df, price_df, _pd.DataFrame()
-                    )
-                    if not calc.empty:
-                        brd_order_cost = float(
-                            _pd.to_numeric(calc[COL_ORDER_COST], errors="coerce").fillna(0).sum()
-                        )
-                        brd_total_cost = float(
-                            _pd.to_numeric(calc[COL_TOTAL_COST], errors="coerce").fillna(0).sum()
-                        )
-                    else:
-                        brd_order_cost = 0.0
-                        brd_total_cost = 0.0
-                note = "✅"
-            else:
-                brd_order_cost = float("nan")
-                brd_total_cost = float("nan")
-                note = "⚠️ Sub-BOM not loaded"
+                required_qty = comp_qty * total_brd_qty
+                price = float(price_lookup.get(comp_vpn, 0) or 0)
+                if price <= 0:
+                    continue
+                stock = float(inv_lookup.get(comp_vpn, 0) or 0)
+                to_order = max(0.0, required_qty - stock)
+                brd_order_cost += to_order * price
+                brd_total_cost += required_qty * price
 
             rows.append({
                 "System": sys_name,
@@ -339,7 +386,7 @@ def get_brd_order_summary(
                 "Total BRD Qty": total_brd_qty,
                 "Order Cost $": brd_order_cost,
                 "Total BOM Cost $": brd_total_cost,
-                "Note": note,
+                "Note": "✅",
             })
 
     if not rows:
@@ -356,7 +403,7 @@ def get_brd_order_summary(
             Total_BRD_Qty=("Total BRD Qty", "sum"),
             Order_Cost=("Order Cost $", "sum"),
             Total_BOM_Cost=("Total BOM Cost $", "sum"),
-            Note=("Note", lambda x: "⚠️ Sub-BOM not loaded" if any("⚠️" in str(v) for v in x) else "✅"),
+            Note=("Note", lambda x: next((v for v in x if "⚠️" in str(v)), "✅")),
         )
         .reset_index()
         .rename(columns={
