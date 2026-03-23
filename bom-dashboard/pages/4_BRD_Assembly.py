@@ -577,9 +577,9 @@ _mc1, _mc2, _mc3, _save_col = st.columns([2, 2, 2, 1])
 with _mc1:
     st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts  |  BRD Qty: **×{brd_qty}**")
 with _mc2:
-    st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.4f}")
+    st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.2f}")
 with _mc3:
-    st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.4f}")
+    st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.2f}")
 with _save_col:
     st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
     if st.button("💾 Save Changes", use_container_width=True, key="brd_save_top"):

@@ -558,7 +558,7 @@ c2.metric("✅ In Stock", f"{kpis['in_stock_count']:,}")
 c3.metric("🔴 Missing", f"{kpis['missing_count']:,}")
 c4.metric("Availability", f"{kpis['availability_pct']:.1f}%")
 c5.metric("⚠️ No Price", f"{kpis['no_price_count']:,}")
-c6.metric("Order Cost $", f"${kpis['order_cost']:,.4f}")
+c6.metric("Order Cost $", f"${kpis['order_cost']:,.2f}")
 
 st.markdown("---")
 
@@ -670,11 +670,11 @@ with _cap_col:
 with _cost_col1:
     if COL_ORDER_COST in df_show.columns:
         _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
-        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.4f}")
+        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.2f}")
 with _cost_col2:
     if COL_TOTAL_COST in df_show.columns:
         _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
-        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.4f}")
+        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.2f}")
 with _save_btn_col:
     st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
     if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
