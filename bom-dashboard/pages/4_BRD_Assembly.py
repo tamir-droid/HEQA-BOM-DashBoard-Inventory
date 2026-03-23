@@ -577,9 +577,9 @@ _mc1, _mc2, _mc3, _save_col = st.columns([2, 2, 2, 1])
 with _mc1:
     st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts  |  BRD Qty: **×{brd_qty}**")
 with _mc2:
-    st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.0f}")
+    st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.4f}")
 with _mc3:
-    st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.0f}")
+    st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.4f}")
 with _save_col:
     st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
     if st.button("💾 Save Changes", use_container_width=True, key="brd_save_top"):
@@ -617,8 +617,8 @@ _col_cfg: dict = {
     "Qty Required": st.column_config.NumberColumn(f"Qty ×{brd_qty}", format="%g", width="small"),
     "In Stock":     st.column_config.NumberColumn("In Stock", format="%g", width="small"),
     "Sub Stock":    st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small"),
-    "Unit Price $": st.column_config.NumberColumn("Unit Price $", format="$%.2f"),
-    "Total Cost $": st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
+    "Unit Price $": st.column_config.NumberColumn("Unit Price $", format="$%.4f"),
+    "Total Cost $": st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
     "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost."),
     "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
