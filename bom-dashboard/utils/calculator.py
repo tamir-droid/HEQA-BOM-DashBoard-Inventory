@@ -331,8 +331,10 @@ def get_brd_order_summary(
         seen_brd: set = set()
         for _, brd_row in brd_rows_in_sys.iterrows():
             brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
-            # Only BRD VPNs with exactly 6 characters after "BRD" (e.g. BRD100700)
-            if len(brd_vpn) != 9:
+            # Only BRD VPNs: "BRD" + 6 digits + optional letter suffix
+            # e.g. BRD100700, BRD400004A, BRD400004B  (min 9 chars, max 10)
+            import re as _re
+            if not _re.match(r'^BRD\d{6}[A-Za-z]?$', brd_vpn):
                 continue
             if brd_vpn in seen_brd:
                 continue
