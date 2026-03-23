@@ -902,21 +902,24 @@ with _tab_brd:
         st.info("No BRD sub-assemblies found in the selected systems, or no BRD sub-BOMs are loaded.")
         st.caption("To see BRD cost breakdown, include BRD assembly BOMs in your combined BOM file.")
     else:
-        _brd_total = _brd_summary["Order Cost $"].fillna(0).sum()
-        _brd_count = _brd_summary["BRD P/N"].nunique()
-        _bc1, _bc2 = st.columns(2)
+        _brd_order_total = _brd_summary["Order Cost $"].fillna(0).sum()
+        _brd_bom_total   = _brd_summary["Total BOM Cost $"].fillna(0).sum()
+        _brd_count       = _brd_summary["BRD P/N"].nunique()
+        _bc1, _bc2, _bc3 = st.columns(3)
         _bc1.metric("BRD Assemblies", f"{_brd_count}")
-        _bc2.metric("💰 Total BRD Order Cost", f"${_brd_total:,.2f}")
+        _bc2.metric("💰 Order Cost (missing)", f"${_brd_order_total:,.2f}")
+        _bc3.metric("📦 Total BOM Cost", f"${_brd_bom_total:,.2f}")
         st.markdown("---")
         st.dataframe(
             _brd_summary,
             column_config={
-                "BRD P/N":       st.column_config.TextColumn("BRD P/N"),
-                "Description":   st.column_config.TextColumn("Description"),
-                "Systems":       st.column_config.TextColumn("Systems"),
-                "Total BRD Qty": st.column_config.NumberColumn("Total BRD Qty", format="%d"),
-                "Order Cost $":  st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
-                "Note":          st.column_config.TextColumn("Note"),
+                "BRD P/N":          st.column_config.TextColumn("BRD P/N"),
+                "Description":      st.column_config.TextColumn("Description"),
+                "Systems":          st.column_config.TextColumn("Systems"),
+                "Total BRD Qty":    st.column_config.NumberColumn("Total BRD Qty", format="%d"),
+                "Order Cost $":     st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
+                "Total BOM Cost $": st.column_config.NumberColumn("Total BOM Cost $", format="$%.2f"),
+                "Note":             st.column_config.TextColumn("Note"),
             },
             hide_index=True,
             use_container_width=True,

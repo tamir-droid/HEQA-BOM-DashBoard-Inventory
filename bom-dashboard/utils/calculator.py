@@ -310,18 +310,25 @@ def get_brd_order_summary(
                 )
                 if required.empty:
                     brd_order_cost = 0.0
+                    brd_total_cost = 0.0
                 else:
                     calc = calculate_results(
                         required, inventory_df, price_df, _pd.DataFrame()
                     )
-                    brd_order_cost = float(
-                        _pd.to_numeric(
-                            calc[COL_ORDER_COST], errors="coerce"
-                        ).fillna(0).sum()
-                    ) if not calc.empty else 0.0
+                    if not calc.empty:
+                        brd_order_cost = float(
+                            _pd.to_numeric(calc[COL_ORDER_COST], errors="coerce").fillna(0).sum()
+                        )
+                        brd_total_cost = float(
+                            _pd.to_numeric(calc[COL_TOTAL_COST], errors="coerce").fillna(0).sum()
+                        )
+                    else:
+                        brd_order_cost = 0.0
+                        brd_total_cost = 0.0
                 note = "✅"
             else:
                 brd_order_cost = float("nan")
+                brd_total_cost = float("nan")
                 note = "⚠️ Sub-BOM not loaded"
 
             rows.append({
@@ -331,6 +338,7 @@ def get_brd_order_summary(
                 "Qty/System": brd_qty_in_sys,
                 "Total BRD Qty": total_brd_qty,
                 "Order Cost $": brd_order_cost,
+                "Total BOM Cost $": brd_total_cost,
                 "Note": note,
             })
 
@@ -347,14 +355,15 @@ def get_brd_order_summary(
             Systems=("System", lambda x: " | ".join(sorted(x.unique()))),
             Total_BRD_Qty=("Total BRD Qty", "sum"),
             Order_Cost=("Order Cost $", "sum"),
+            Total_BOM_Cost=("Total BOM Cost $", "sum"),
             Note=("Note", lambda x: "⚠️ Sub-BOM not loaded" if any("⚠️" in str(v) for v in x) else "✅"),
         )
         .reset_index()
         .rename(columns={
             "Total_BRD_Qty": "Total BRD Qty",
             "Order_Cost": "Order Cost $",
-            "Systems": "Systems",
+            "Total_BOM_Cost": "Total BOM Cost $",
         })
     )
 
-    return grouped[["BRD P/N", "Description", "Systems", "Total BRD Qty", "Order Cost $", "Note"]]
+    return grouped[["BRD P/N", "Description", "Systems", "Total BRD Qty", "Order Cost $", "Total BOM Cost $", "Note"]]
