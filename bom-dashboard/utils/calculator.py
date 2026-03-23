@@ -302,17 +302,17 @@ def get_brd_order_summary(
     # ── Build fast lookups ────────────────────────────────────────────────────
     inv_lookup: dict = {}
     if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
-        inv_lookup = (
-            inventory_df.groupby(INV_KEY_COL)[INV_QTY_COL].sum().to_dict()
-        )
+        _inv = inventory_df.copy()
+        _inv[INV_QTY_COL] = _pd.to_numeric(_inv[INV_QTY_COL], errors="coerce").fillna(0)
+        inv_lookup = _inv.groupby(INV_KEY_COL)[INV_QTY_COL].sum().to_dict()
 
     price_lookup: dict = {}
     if not price_df.empty and PRICE_KEY_COL in price_df.columns:
-        price_lookup = (
-            price_df.drop_duplicates(subset=PRICE_KEY_COL)
-            .set_index(PRICE_KEY_COL)[PRICE_USD_COL]
-            .to_dict()
-        )
+        _pr = price_df[[PRICE_KEY_COL, PRICE_USD_COL]].copy()
+        _pr[PRICE_KEY_COL] = _pr[PRICE_KEY_COL].astype(str).str.strip()
+        _pr[PRICE_USD_COL] = _pd.to_numeric(_pr[PRICE_USD_COL], errors="coerce").fillna(0)
+        _pr = _pr[_pr[PRICE_USD_COL] > 0].drop_duplicates(subset=PRICE_KEY_COL)
+        price_lookup = _pr.set_index(PRICE_KEY_COL)[PRICE_USD_COL].to_dict()
 
     rows = []
 
@@ -372,10 +372,10 @@ def get_brd_order_summary(
                     _pd.to_numeric(comp.get(BOM_QTY_COL, 0), errors="coerce") or 0
                 )
                 required_qty = comp_qty * total_brd_qty
-                price = float(price_lookup.get(comp_vpn, 0) or 0)
+                price = float(price_lookup.get(comp_vpn, 0))
                 if price <= 0:
                     continue
-                stock = float(inv_lookup.get(comp_vpn, 0) or 0)
+                stock = float(inv_lookup.get(comp_vpn, 0))
                 to_order = max(0.0, required_qty - stock)
                 brd_order_cost += to_order * price
                 brd_total_cost += required_qty * price
