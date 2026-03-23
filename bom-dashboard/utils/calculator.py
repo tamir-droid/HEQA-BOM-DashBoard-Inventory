@@ -288,6 +288,9 @@ def get_brd_order_summary(
         seen_brd: set = set()
         for _, brd_row in brd_rows.iterrows():
             brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
+            # Only include BRD VPNs with exactly 6 characters after "BRD"
+            if len(brd_vpn) != 9:
+                continue
             if brd_vpn in seen_brd:
                 continue
             seen_brd.add(brd_vpn)
@@ -333,4 +336,25 @@ def get_brd_order_summary(
 
     if not rows:
         return _pd.DataFrame()
-    return _pd.DataFrame(rows)
+
+    df = _pd.DataFrame(rows)
+
+    # Group by BRD P/N — each BRD appears only once, totals summed across systems
+    grouped = (
+        df.groupby("BRD P/N", sort=False)
+        .agg(
+            Description=("Description", "first"),
+            Systems=("System", lambda x: " | ".join(sorted(x.unique()))),
+            Total_BRD_Qty=("Total BRD Qty", "sum"),
+            Order_Cost=("Order Cost $", "sum"),
+            Note=("Note", lambda x: "⚠️ Sub-BOM not loaded" if any("⚠️" in str(v) for v in x) else "✅"),
+        )
+        .reset_index()
+        .rename(columns={
+            "Total_BRD_Qty": "Total BRD Qty",
+            "Order_Cost": "Order Cost $",
+            "Systems": "Systems",
+        })
+    )
+
+    return grouped[["BRD P/N", "Description", "Systems", "Total BRD Qty", "Order Cost $", "Note"]]
