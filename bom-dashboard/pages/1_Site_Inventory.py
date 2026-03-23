@@ -16,7 +16,6 @@ from config import (
     PRICE_KEY_COL, PRICE_USD_COL,
     TYPE_KEY_COL, TYPE_COL,
 )
-from utils.bom_loader import parse_combined_bom_bytes
 from utils.inventory_parser import load_inventory
 from utils.price_parser import load_prices
 from utils.type_parser import load_types
@@ -334,18 +333,32 @@ combined_upload = st.file_uploader(
 )
 
 if combined_upload is not None:
+    import io as _io
+    import pandas as _pd
     file_bytes = combined_upload.read()
-    bom_dict, parse_err = parse_combined_bom_bytes(combined_upload.name, file_bytes)
-    if parse_err:
-        st.error(f"❌ Parse error: {parse_err}")
-    else:
-        _total_rows = sum(len(v) for v in bom_dict.values())
-        st.success(
-            f"✅ Parsed **{len(bom_dict)}** system(s), **{_total_rows:,}** total rows:"
-        )
-        for sys_name, sys_df in sorted(bom_dict.items()):
-            st.caption(f"  • **{sys_name}** — {len(sys_df):,} parts")
+    _preview_ok = False
+    _preview_rows = 0
+    try:
+        _df_prev = _pd.read_excel(_io.BytesIO(file_bytes), sheet_name="DataSheet")
+        _df_prev.columns = _df_prev.columns.str.strip()
+        if "Level" in _df_prev.columns and "Vendor Part Number" in _df_prev.columns:
+            _preview_ok = True
+            _preview_rows = len(_df_prev)
+        else:
+            # try first sheet
+            _df_prev = _pd.read_excel(_io.BytesIO(file_bytes))
+            _df_prev.columns = _df_prev.columns.str.strip()
+            if "Level" in _df_prev.columns and "Vendor Part Number" in _df_prev.columns:
+                _preview_ok = True
+                _preview_rows = len(_df_prev)
+    except Exception:
+        pass
 
+    if not _preview_ok:
+        st.error("❌ File must have **Level** and **Vendor Part Number** columns.")
+    else:
+        st.success(f"✅ Valid BOM file — **{_preview_rows:,}** rows found.")
+        st.info("ℹ️ Systems will be detected from Level-1 rows (SYS-/BRD-/BRA- prefix) when loaded by the dashboard.")
         st.warning(f"⚠️ This will **overwrite** `data/{COMBINED_BOM_FILENAME}`.")
         save_col, _ = st.columns([1, 5])
         with save_col:
@@ -355,8 +368,8 @@ if combined_upload is not None:
                     (DATA_DIR / COMBINED_BOM_FILENAME).write_bytes(file_bytes)
                     _invalidate_cache()
                     st.success(
-                        f"✅ `{COMBINED_BOM_FILENAME}` saved ({len(bom_dict)} systems, "
-                        f"{_total_rows:,} rows). Go to Main Dashboard and press **Calculate**."
+                        f"✅ `{COMBINED_BOM_FILENAME}` saved ({_preview_rows:,} rows). "
+                        f"Go to Main Dashboard — systems will appear automatically."
                     )
                     st.rerun()
                 except Exception as exc:
