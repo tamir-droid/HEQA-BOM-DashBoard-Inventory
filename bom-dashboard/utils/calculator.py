@@ -251,3 +251,86 @@ def get_kpis(results_df: pd.DataFrame) -> dict:
         "total_procurement_cost": total_cost,
         "order_cost": order_cost,
     }
+
+
+def get_brd_order_summary(
+    bom_dfs: dict,
+    qty_map: dict,
+    inventory_df,
+    price_df,
+):
+    """Calculate per-BRD order cost (missing parts only).
+
+    For each selected SYS-* system, finds BRD rows in its BOM, then uses
+    the BRD sub-BOM from bom_dfs (if present) to calculate order cost
+    of missing components.
+
+    Returns a DataFrame with columns:
+        System, BRD P/N, Description, Qty/System, Total BRD Qty,
+        Order Cost $, Note
+    """
+    import pandas as _pd
+
+    rows = []
+
+    for sys_name, sys_df in bom_dfs.items():
+        if not str(sys_name).upper().startswith("SYS-"):
+            continue
+        sys_qty = int(qty_map.get(sys_name, 0))
+        if sys_qty <= 0:
+            continue
+
+        brd_mask = (
+            sys_df[BOM_VPN_COL].astype(str).str.strip().str.upper().str.startswith("BRD")
+        )
+        brd_rows = sys_df[brd_mask]
+
+        seen_brd: set = set()
+        for _, brd_row in brd_rows.iterrows():
+            brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
+            if brd_vpn in seen_brd:
+                continue
+            seen_brd.add(brd_vpn)
+
+            brd_qty_in_sys = float(
+                _pd.to_numeric(brd_row.get(BOM_QTY_COL, 1), errors="coerce") or 1
+            )
+            total_brd_qty = int(brd_qty_in_sys * sys_qty)
+            brd_desc = str(brd_row.get(BOM_DESC_COL, ""))
+
+            brd_sub_bom = bom_dfs.get(brd_vpn)
+
+            if brd_sub_bom is not None and not brd_sub_bom.empty:
+                required = aggregate_bom(
+                    {brd_vpn: brd_sub_bom},
+                    {brd_vpn: total_brd_qty},
+                )
+                if required.empty:
+                    brd_order_cost = 0.0
+                else:
+                    calc = calculate_results(
+                        required, inventory_df, price_df, _pd.DataFrame()
+                    )
+                    brd_order_cost = float(
+                        _pd.to_numeric(
+                            calc[COL_ORDER_COST], errors="coerce"
+                        ).fillna(0).sum()
+                    ) if not calc.empty else 0.0
+                note = "✅"
+            else:
+                brd_order_cost = float("nan")
+                note = "⚠️ Sub-BOM not loaded"
+
+            rows.append({
+                "System": sys_name,
+                "BRD P/N": brd_vpn,
+                "Description": brd_desc,
+                "Qty/System": brd_qty_in_sys,
+                "Total BRD Qty": total_brd_qty,
+                "Order Cost $": brd_order_cost,
+                "Note": note,
+            })
+
+    if not rows:
+        return _pd.DataFrame()
+    return _pd.DataFrame(rows)

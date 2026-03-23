@@ -45,7 +45,7 @@ def _is_system_vpn(vpn: str) -> bool:
     combined DataFrame at the wrong boundary.
     """
     v = str(vpn).strip().upper()
-    return v.startswith(("SYS-", "BRD", "BRA"))
+    return v.startswith(("SYS-", "BRD"))
 
 
 def _read_flat_df(file_bytes: bytes) -> pd.DataFrame | None:

@@ -45,6 +45,7 @@ from utils.calculator import (
     aggregate_bom,
     calculate_results,
     get_kpis,
+    get_brd_order_summary,
     COL_REQUIRED,
     COL_IN_STOCK,
     COL_TO_ORDER,
@@ -422,7 +423,7 @@ qty_map: dict[str, int] = {}
 if bom_files:
     st.markdown("### ⚙️ Systems Quantity")
 
-    _bom_names = sorted(bom_files.keys())
+    _bom_names = sorted(n for n in bom_files.keys() if str(n).upper().startswith("SYS-"))
 
     def _short(name: str) -> str:
         return (name.replace(".xlsx", "")
@@ -536,6 +537,7 @@ if calc_clicked:
                 combined_inv = inventory_df
 
             results = calculate_results(required_df, combined_inv, prices_df, types_df)
+            st.session_state["_combined_inv"] = combined_inv
             # MFR Name 2 / MPN 2 come from BOM second rows (extracted in aggregate_bom)
             st.session_state[SS_RESULTS] = results
 
@@ -562,333 +564,364 @@ c6.metric("Order Cost $", f"${kpis['order_cost']:,.2f}")
 
 st.markdown("---")
 
-# ── Filters ───────────────────────────────────────────────────────────────────
-st.markdown("### 🔍 Filters")
-fc1, fc2, fc3 = st.columns([2, 2, 3])
+_tab_comp, _tab_brd = st.tabs(["📊 Components", "🔌 BRD Assemblies"])
 
-with fc1:
-    type_vals = sorted(results["Type"].dropna().unique().tolist()) if "Type" in results.columns else []
-    if "BULK" not in type_vals:
-        type_vals = sorted(type_vals + ["BULK"])
-    type_options = ["All"] + type_vals
-    _default_type_idx = type_options.index("R") if "R" in type_options else 0
-    sel_type = st.selectbox("Part Type", type_options, index=_default_type_idx)
+with _tab_comp:
+    # ── Filters ───────────────────────────────────────────────────────────────
+    st.markdown("### 🔍 Filters")
+    fc1, fc2, fc3 = st.columns([2, 2, 3])
 
-with fc2:
-    status_options = ["All", "🔴 Missing", "🟠 Tracking", "✅ In Stock", "⚠️ No Price"]
-    sel_status = st.selectbox(
-        "Status",
-        status_options,
-        index=status_options.index("🔴 Missing"),
+    with fc1:
+        type_vals = sorted(results["Type"].dropna().unique().tolist()) if "Type" in results.columns else []
+        if "BULK" not in type_vals:
+            type_vals = sorted(type_vals + ["BULK"])
+        type_options = ["All"] + type_vals
+        _default_type_idx = type_options.index("R") if "R" in type_options else 0
+        sel_type = st.selectbox("Part Type", type_options, index=_default_type_idx)
+
+    with fc2:
+        status_options = ["All", "🔴 Missing", "🟠 Tracking", "✅ In Stock", "⚠️ No Price"]
+        sel_status = st.selectbox(
+            "Status",
+            status_options,
+            index=status_options.index("🔴 Missing"),
+        )
+
+    with fc3:
+        search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
+
+    # BRD sub-components are always excluded from main dashboard (visible only in 🔌 BRD Assembly page)
+
+    # Apply filters
+    df_show = results.copy()
+
+    # ── Inject Order Status, PO #, Due Date, Qty Ordered from followup ────────
+    _followup = st.session_state.get(SS_FOLLOWUP, {})
+    def _order_status(v):
+        if v not in _followup:
+            return "—"
+        po = str(_followup[v].get("po", "")).strip().upper()
+        if po == "NA":
+            return "⬜ Ignored"
+        return "🔵 Ordered"
+
+    df_show["Order Status"] = df_show[BOM_VPN_COL].map(_order_status)
+    df_show["PO #"] = df_show[BOM_VPN_COL].map(
+        lambda v: _followup[v].get("po", "") if v in _followup else ""
     )
-
-with fc3:
-    search = st.text_input("🔎 Search (VPN / Description / Manufacturer)", "")
-
-# BRD sub-components are always excluded from main dashboard (visible only in 🔌 BRD Assembly page)
-
-# Apply filters
-df_show = results.copy()
-
-# ── Inject Order Status, PO #, Due Date, Qty Ordered from followup ────────────
-_followup = st.session_state.get(SS_FOLLOWUP, {})
-def _order_status(v):
-    if v not in _followup:
-        return "—"
-    po = str(_followup[v].get("po", "")).strip().upper()
-    if po == "NA":
-        return "⬜ Ignored"
-    return "🔵 Ordered"
-
-df_show["Order Status"] = df_show[BOM_VPN_COL].map(_order_status)
-df_show["PO #"] = df_show[BOM_VPN_COL].map(
-    lambda v: _followup[v].get("po", "") if v in _followup else ""
-)
-def _parse_date(s):
-    try:
-        # Handle "2024-06-15" and "2024-06-15T00:00:00" (Timestamp isoformat)
-        return datetime.date.fromisoformat(str(s)[:10]) if s else None
-    except (ValueError, TypeError):
-        return None
-
-df_show["Due Date"] = df_show[BOM_VPN_COL].map(
-    lambda v: _parse_date(_followup[v].get("due_date", "")) if v in _followup else None
-)
-df_show["Qty Ordered"] = pd.to_numeric(
-    df_show[BOM_VPN_COL].map(lambda v: _followup[v].get("qty_ordered") if v in _followup else None),
-    errors="coerce",
-)
-
-# Override Type to BULK for parts whose VPN starts with a known BULK prefix
-_bulk_mask = df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
-df_show.loc[_bulk_mask, "Type"] = "BULK"
-
-# ── NA logic: if PO # == "NA", zero out Order Cost and To Order ───────────────
-_na_mask = df_show["PO #"].str.strip().str.upper() == "NA"
-if _na_mask.any():
-    if COL_ORDER_COST in df_show.columns:
-        df_show.loc[_na_mask, COL_ORDER_COST] = 0
-    if COL_TO_ORDER in df_show.columns:
-        df_show.loc[_na_mask, COL_TO_ORDER] = 0
-
-if sel_type != "All" and "Type" in df_show.columns:
-    df_show = df_show[df_show["Type"] == sel_type]
-    # Always exclude BULK-prefixed items from non-BULK type views
-    if sel_type != "BULK":
-        df_show = df_show[~df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)]
-
-if sel_status != "All":
-    if sel_status == "🔴 Missing" and COL_STATUS in df_show.columns:
-        # All missing parts — both unordered (red) and ordered-in-tracking (orange)
-        df_show = df_show[df_show[COL_STATUS].str.contains("Missing", na=False)]
-    elif sel_status == "🟠 Tracking" and COL_STATUS in df_show.columns:
-        # Only missing parts where an order has been placed
-        df_show = df_show[
-            df_show[COL_STATUS].str.contains("Missing", na=False)
-            & (df_show["Order Status"] == "🔵 Ordered")
-        ]
-    elif sel_status == "✅ In Stock" and COL_STATUS in df_show.columns:
-        df_show = df_show[df_show[COL_STATUS] == "✅ In Stock"]
-    elif sel_status == "⚠️ No Price" and COL_STATUS in df_show.columns:
-        df_show = df_show[df_show[COL_STATUS].str.contains("No Price", na=False)]
-
-if search:
-    s = search.lower()
-    mask = pd.Series([False] * len(df_show), index=df_show.index)
-    for col in [BOM_VPN_COL, "Description", BOM_MFR_COL, "Heqa P.N", "MFR Name"]:
-        if col in df_show.columns:
-            mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
-    df_show = df_show[mask]
-
-# Always exclude BRD sub-components from main dashboard
-if "Under BRD" in df_show.columns:
-    df_show = df_show[~df_show["Under BRD"]]
-
-_cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
-with _cap_col:
-    st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
-with _cost_col1:
-    if COL_ORDER_COST in df_show.columns:
-        _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
-        st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.2f}")
-with _cost_col2:
-    if COL_TOTAL_COST in df_show.columns:
-        _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
-        st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.2f}")
-with _save_btn_col:
-    st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
-    if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
-        st.session_state["_do_save_main"] = True
-
-# Sort by MFR Name
-if "MFR Name" in df_show.columns:
-    df_show = df_show.sort_values("MFR Name", ascending=True, na_position="last").reset_index(drop=True)
-
-# Rename VPN column and Manufacturer for display
-df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N", "Manufacturer": "MFR Name"})
-
-_table_height = max(200, len(df_show) * 35 + 50)
-
-# ── Status emoji indicator column ─────────────────────────────────────────────
-def _status_emoji(row: pd.Series) -> str:
-    po = str(row.get("PO #", "")).strip().lower()
-    if po == "ignore":
-        return "⬜"
-    if po == "na":
-        return "🚫"  # NA = excluded from order cost, shown grey with "Ignored"
-    is_ordered = row.get("Order Status", "—") == "🔵 Ordered"
-    status = str(row.get(COL_STATUS, ""))
-    if is_ordered and "Missing" in status:
-        return "🟠"
-    elif "Missing" in status:
-        return "🔴"
-    elif "In Stock" in status:
-        return "🟢"
-    else:
-        return "🟡"
-
-df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
-
-# ── Reorder columns: MFR Name 2 + MPN 2 right after MPN ──────────────────────
-_col_order = [
-    "●", "Heqa P.N", "Description", "MFR Name",
-    "Manufacturer Part Number",
-    "MFR Name 2", "MPN 2",
-    "Type",
-    COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
-    COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
-    "Order Status", "PO #", "Due Date", "Qty Ordered",
-    COL_STATUS, "Product Breakdown",
-]
-_ordered = [c for c in _col_order if c in df_show.columns]
-_extra   = [c for c in df_show.columns if c not in _col_order]
-df_show  = df_show[_ordered + _extra]
-
-# ── Column config ──────────────────────────────────────────────────────────────
-_view_col_cfg = {
-    "●":            st.column_config.TextColumn("●", width="small"),
-    "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
-    "Description":  st.column_config.TextColumn("Description"),
-    "MFR Name":     st.column_config.TextColumn("MFR Name"),
-    "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
-    "MFR Name 2": st.column_config.TextColumn("MFR Name 2"),
-    "MPN 2":      st.column_config.TextColumn("MPN 2"),
-    "Type":         st.column_config.TextColumn("Type", width="small"),
-    COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
-    COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
-    COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
-    COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.4f"),
-    COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
-    COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.4f"),
-    COL_STATUS:     st.column_config.TextColumn("Status"),
-    "Order Status": st.column_config.TextColumn("Order Status", width="small"),
-    "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost. Type 'Ignore' to mark as ignored."),
-    "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
-    "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
-}
-
-# ── Color legend ──────────────────────────────────────────────────────────────
-st.caption(
-    "🔴 Missing &nbsp;|&nbsp; "
-    "🟠 Ordered / tracking &nbsp;|&nbsp; "
-    "🟢 In stock &nbsp;|&nbsp; "
-    "🟡 Partial &nbsp;|&nbsp; "
-    "⬜ Ignored &nbsp;— edit **PO #**, **Due Date**, **Qty Ordered** directly, then click **Save Changes**."
-)
-
-# ── Editable results table ─────────────────────────────────────────────────────
-_editable_cols = {"PO #", "Due Date", "Qty Ordered", COL_IN_STOCK}
-_disabled_cols = [c for c in df_show.columns if c not in _editable_cols]
-
-edited_df = st.data_editor(
-    df_show,
-    column_config=_view_col_cfg,
-    disabled=_disabled_cols,
-    use_container_width=True,
-    height=_table_height,
-    hide_index=True,
-    key="main_table",
-)
-
-if st.session_state.pop("_do_save_main", False):
-    _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
-
-    for _, row in edited_df.iterrows():
-        vpn = str(row.get("Heqa P.N", ""))
-        po = str(row.get("PO #", "") or "").strip()
-        _due_raw = row.get("Due Date")
-        due = ""
+    def _parse_date(s):
         try:
-            if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
-                _d = str(_due_raw)[:10]
-                datetime.date.fromisoformat(_d)   # validate
-                due = _d
+            # Handle "2024-06-15" and "2024-06-15T00:00:00" (Timestamp isoformat)
+            return datetime.date.fromisoformat(str(s)[:10]) if s else None
         except (ValueError, TypeError):
-            due = ""
-        qty_ord = row.get("Qty Ordered")
-        qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+            return None
 
-        was_tracked = vpn in _fup
-        manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
-        existing = _fup.get(vpn, {})
-        if po or due or qty_ord_val:
-            if vpn not in _fup:
-                _fup[vpn] = {
-                    "date": datetime.date.today().isoformat(),
-                    "user": st.session_state.get(SS_CURRENT_USER, ""),
-                    "notes": "",
-                    "manually_marked": False,
-                }
-            _fup[vpn]["po"] = po
-            # Preserve existing due_date if user didn't change it (came back empty)
-            _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
-            _fup[vpn]["qty_ordered"] = qty_ord_val
-        elif was_tracked and not manually_marked:
-            del _fup[vpn]
-
-    st.session_state[SS_FOLLOWUP] = _fup
-    save_followup(DATA_DIR, _fup)
-
-    # ── Update Inventory.xlsx for any In Stock qty changes ─────────────────
-    _inv_path = DATA_DIR / "Inventory.xlsx"
-    try:
-        _inv_df = pd.read_excel(_inv_path, sheet_name="Sheet1", dtype=str) if _inv_path.exists() else pd.DataFrame()
-    except Exception:
-        _inv_df = pd.DataFrame()
-    if not _inv_df.empty and INV_KEY_COL in _inv_df.columns and INV_QTY_COL in _inv_df.columns:
-        _inv_updated = False
-        for _, _row in edited_df.iterrows():
-            _vpn = str(_row.get("Heqa P.N", "")).strip()
-            _new_qty = _row.get(COL_IN_STOCK)
-            if not _vpn or pd.isna(_new_qty):
-                continue
-            _orig_rows = df_show[df_show["Heqa P.N"] == _vpn][COL_IN_STOCK]
-            if _orig_rows.empty:
-                continue
-            _orig_val = float(_orig_rows.iloc[0]) if pd.notna(_orig_rows.iloc[0]) else 0.0
-            _new_val = float(_new_qty)
-            if _orig_val != _new_val:
-                _mask = _inv_df[INV_KEY_COL].astype(str).str.strip() == _vpn
-                if _mask.any():
-                    _inv_df.loc[_mask, INV_QTY_COL] = _new_val
-                    _inv_updated = True
-        if _inv_updated:
-            try:
-                with pd.ExcelWriter(DATA_DIR / "Inventory.xlsx", engine="openpyxl") as _w:
-                    _inv_df.to_excel(_w, sheet_name="Sheet1", index=False)
-                st.cache_data.clear()
-            except Exception as _e:
-                st.warning(f"⚠️ Could not update Inventory.xlsx: {_e}")
-
-    # Clear data_editor widget state so it reloads fresh from disk
-    st.session_state.pop("main_table", None)
-    st.success("✅ Saved!")
-    st.rerun()
-
-# ── Exports ───────────────────────────────────────────────────────────────────
-st.markdown("### 📥 Export")
-ec1, ec2, ec3 = st.columns(3)
-
-today = datetime.date.today().isoformat()
-
-with ec1:
-    to_order_df = df_show[df_show[COL_TO_ORDER] > 0].copy() if COL_TO_ORDER in df_show.columns else pd.DataFrame()
-    if not to_order_df.empty:
-        st.download_button(
-            "⬇️ Order List (CSV)",
-            data=to_order_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"order_list_{today}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    else:
-        st.success("Nothing to order in current view.")
-
-with ec2:
-    no_price_df = (
-        df_show[df_show[COL_UNIT_PRICE].isna()].copy()
-        if COL_UNIT_PRICE in df_show.columns
-        else pd.DataFrame()
+    df_show["Due Date"] = df_show[BOM_VPN_COL].map(
+        lambda v: _parse_date(_followup[v].get("due_date", "")) if v in _followup else None
     )
-    if not no_price_df.empty:
-        st.download_button(
-            "⬇️ No-Price List (CSV)",
-            data=no_price_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"no_price_{today}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    else:
-        st.success("All parts have prices.")
+    df_show["Qty Ordered"] = pd.to_numeric(
+        df_show[BOM_VPN_COL].map(lambda v: _followup[v].get("qty_ordered") if v in _followup else None),
+        errors="coerce",
+    )
 
-with ec3:
-    st.download_button(
-        "⬇️ Full View (CSV)",
-        data=df_show.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"bom_results_{today}.csv",
-        mime="text/csv",
+    # Override Type to BULK for parts whose VPN starts with a known BULK prefix
+    _bulk_mask = df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)
+    df_show.loc[_bulk_mask, "Type"] = "BULK"
+
+    # ── NA logic: if PO # == "NA", zero out Order Cost and To Order ───────────
+    _na_mask = df_show["PO #"].str.strip().str.upper() == "NA"
+    if _na_mask.any():
+        if COL_ORDER_COST in df_show.columns:
+            df_show.loc[_na_mask, COL_ORDER_COST] = 0
+        if COL_TO_ORDER in df_show.columns:
+            df_show.loc[_na_mask, COL_TO_ORDER] = 0
+
+    if sel_type != "All" and "Type" in df_show.columns:
+        df_show = df_show[df_show["Type"] == sel_type]
+        # Always exclude BULK-prefixed items from non-BULK type views
+        if sel_type != "BULK":
+            df_show = df_show[~df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)]
+
+    if sel_status != "All":
+        if sel_status == "🔴 Missing" and COL_STATUS in df_show.columns:
+            # All missing parts — both unordered (red) and ordered-in-tracking (orange)
+            df_show = df_show[df_show[COL_STATUS].str.contains("Missing", na=False)]
+        elif sel_status == "🟠 Tracking" and COL_STATUS in df_show.columns:
+            # Only missing parts where an order has been placed
+            df_show = df_show[
+                df_show[COL_STATUS].str.contains("Missing", na=False)
+                & (df_show["Order Status"] == "🔵 Ordered")
+            ]
+        elif sel_status == "✅ In Stock" and COL_STATUS in df_show.columns:
+            df_show = df_show[df_show[COL_STATUS] == "✅ In Stock"]
+        elif sel_status == "⚠️ No Price" and COL_STATUS in df_show.columns:
+            df_show = df_show[df_show[COL_STATUS].str.contains("No Price", na=False)]
+
+    if search:
+        s = search.lower()
+        mask = pd.Series([False] * len(df_show), index=df_show.index)
+        for col in [BOM_VPN_COL, "Description", BOM_MFR_COL, "Heqa P.N", "MFR Name"]:
+            if col in df_show.columns:
+                mask |= df_show[col].astype(str).str.lower().str.contains(s, na=False)
+        df_show = df_show[mask]
+
+    # Always exclude BRD sub-components from main dashboard
+    if "Under BRD" in df_show.columns:
+        df_show = df_show[~df_show["Under BRD"]]
+
+    _cap_col, _cost_col1, _cost_col2, _save_btn_col = st.columns([3, 2, 2, 1])
+    with _cap_col:
+        st.caption(f"Showing **{len(df_show):,}** of **{len(results):,}** parts")
+    with _cost_col1:
+        if COL_ORDER_COST in df_show.columns:
+            _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
+            st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.2f}")
+    with _cost_col2:
+        if COL_TOTAL_COST in df_show.columns:
+            _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
+            st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.2f}")
+    with _save_btn_col:
+        st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
+        if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
+            st.session_state["_do_save_main"] = True
+
+    # Sort by MFR Name
+    if "MFR Name" in df_show.columns:
+        df_show = df_show.sort_values("MFR Name", ascending=True, na_position="last").reset_index(drop=True)
+
+    # Rename VPN column and Manufacturer for display
+    df_show = df_show.rename(columns={BOM_VPN_COL: "Heqa P.N", "Manufacturer": "MFR Name"})
+
+    _table_height = max(200, len(df_show) * 35 + 50)
+
+    # ── Status emoji indicator column ─────────────────────────────────────────
+    def _status_emoji(row: pd.Series) -> str:
+        po = str(row.get("PO #", "")).strip().lower()
+        if po == "ignore":
+            return "⬜"
+        if po == "na":
+            return "🚫"  # NA = excluded from order cost, shown grey with "Ignored"
+        is_ordered = row.get("Order Status", "—") == "🔵 Ordered"
+        status = str(row.get(COL_STATUS, ""))
+        if is_ordered and "Missing" in status:
+            return "🟠"
+        elif "Missing" in status:
+            return "🔴"
+        elif "In Stock" in status:
+            return "🟢"
+        else:
+            return "🟡"
+
+    df_show.insert(0, "●", df_show.apply(_status_emoji, axis=1))
+
+    # ── Reorder columns: MFR Name 2 + MPN 2 right after MPN ──────────────────
+    _col_order = [
+        "●", "Heqa P.N", "Description", "MFR Name",
+        "Manufacturer Part Number",
+        "MFR Name 2", "MPN 2",
+        "Type",
+        COL_REQUIRED, COL_IN_STOCK, COL_TO_ORDER,
+        COL_UNIT_PRICE, COL_TOTAL_COST, COL_ORDER_COST,
+        "Order Status", "PO #", "Due Date", "Qty Ordered",
+        COL_STATUS, "Product Breakdown",
+    ]
+    _ordered = [c for c in _col_order if c in df_show.columns]
+    _extra   = [c for c in df_show.columns if c not in _col_order]
+    df_show  = df_show[_ordered + _extra]
+
+    # ── Column config ──────────────────────────────────────────────────────────
+    _view_col_cfg = {
+        "●":            st.column_config.TextColumn("●", width="small"),
+        "Heqa P.N":     st.column_config.TextColumn("Heqa P.N"),
+        "Description":  st.column_config.TextColumn("Description"),
+        "MFR Name":     st.column_config.TextColumn("MFR Name"),
+        "Manufacturer Part Number": st.column_config.TextColumn("MPN"),
+        "MFR Name 2": st.column_config.TextColumn("MFR Name 2"),
+        "MPN 2":      st.column_config.TextColumn("MPN 2"),
+        "Type":         st.column_config.TextColumn("Type", width="small"),
+        COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
+        COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
+        COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
+        COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.4f"),
+        COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
+        COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.4f"),
+        COL_STATUS:     st.column_config.TextColumn("Status"),
+        "Order Status": st.column_config.TextColumn("Order Status", width="small"),
+        "PO #":         st.column_config.TextColumn("PO #", help="Type 'NA' to exclude from Order Cost. Type 'Ignore' to mark as ignored."),
+        "Due Date":     st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
+        "Qty Ordered":  st.column_config.NumberColumn("Qty Ordered", min_value=0, step=0.1, format="%.1f"),
+    }
+
+    # ── Color legend ──────────────────────────────────────────────────────────
+    st.caption(
+        "🔴 Missing &nbsp;|&nbsp; "
+        "🟠 Ordered / tracking &nbsp;|&nbsp; "
+        "🟢 In stock &nbsp;|&nbsp; "
+        "🟡 Partial &nbsp;|&nbsp; "
+        "⬜ Ignored &nbsp;— edit **PO #**, **Due Date**, **Qty Ordered** directly, then click **Save Changes**."
+    )
+
+    # ── Editable results table ─────────────────────────────────────────────────
+    _editable_cols = {"PO #", "Due Date", "Qty Ordered", COL_IN_STOCK}
+    _disabled_cols = [c for c in df_show.columns if c not in _editable_cols]
+
+    edited_df = st.data_editor(
+        df_show,
+        column_config=_view_col_cfg,
+        disabled=_disabled_cols,
         use_container_width=True,
+        height=_table_height,
+        hide_index=True,
+        key="main_table",
     )
+
+    if st.session_state.pop("_do_save_main", False):
+        _fup = dict(st.session_state.get(SS_FOLLOWUP, {}))
+
+        for _, row in edited_df.iterrows():
+            vpn = str(row.get("Heqa P.N", ""))
+            po = str(row.get("PO #", "") or "").strip()
+            _due_raw = row.get("Due Date")
+            due = ""
+            try:
+                if _due_raw is not None and not (isinstance(_due_raw, float) and pd.isna(_due_raw)):
+                    _d = str(_due_raw)[:10]
+                    datetime.date.fromisoformat(_d)   # validate
+                    due = _d
+            except (ValueError, TypeError):
+                due = ""
+            qty_ord = row.get("Qty Ordered")
+            qty_ord_val = round(float(qty_ord), 1) if pd.notna(qty_ord) and qty_ord else None
+
+            was_tracked = vpn in _fup
+            manually_marked = was_tracked and _fup[vpn].get("manually_marked", False)
+            existing = _fup.get(vpn, {})
+            if po or due or qty_ord_val:
+                if vpn not in _fup:
+                    _fup[vpn] = {
+                        "date": datetime.date.today().isoformat(),
+                        "user": st.session_state.get(SS_CURRENT_USER, ""),
+                        "notes": "",
+                        "manually_marked": False,
+                    }
+                _fup[vpn]["po"] = po
+                # Preserve existing due_date if user didn't change it (came back empty)
+                _fup[vpn]["due_date"] = due if due else existing.get("due_date", "")
+                _fup[vpn]["qty_ordered"] = qty_ord_val
+            elif was_tracked and not manually_marked:
+                del _fup[vpn]
+
+        st.session_state[SS_FOLLOWUP] = _fup
+        save_followup(DATA_DIR, _fup)
+
+        # ── Update Inventory.xlsx for any In Stock qty changes ─────────────────
+        _inv_path = DATA_DIR / "Inventory.xlsx"
+        try:
+            _inv_df = pd.read_excel(_inv_path, sheet_name="Sheet1", dtype=str) if _inv_path.exists() else pd.DataFrame()
+        except Exception:
+            _inv_df = pd.DataFrame()
+        if not _inv_df.empty and INV_KEY_COL in _inv_df.columns and INV_QTY_COL in _inv_df.columns:
+            _inv_updated = False
+            for _, _row in edited_df.iterrows():
+                _vpn = str(_row.get("Heqa P.N", "")).strip()
+                _new_qty = _row.get(COL_IN_STOCK)
+                if not _vpn or pd.isna(_new_qty):
+                    continue
+                _orig_rows = df_show[df_show["Heqa P.N"] == _vpn][COL_IN_STOCK]
+                if _orig_rows.empty:
+                    continue
+                _orig_val = float(_orig_rows.iloc[0]) if pd.notna(_orig_rows.iloc[0]) else 0.0
+                _new_val = float(_new_qty)
+                if _orig_val != _new_val:
+                    _mask = _inv_df[INV_KEY_COL].astype(str).str.strip() == _vpn
+                    if _mask.any():
+                        _inv_df.loc[_mask, INV_QTY_COL] = _new_val
+                        _inv_updated = True
+            if _inv_updated:
+                try:
+                    with pd.ExcelWriter(DATA_DIR / "Inventory.xlsx", engine="openpyxl") as _w:
+                        _inv_df.to_excel(_w, sheet_name="Sheet1", index=False)
+                    st.cache_data.clear()
+                except Exception as _e:
+                    st.warning(f"⚠️ Could not update Inventory.xlsx: {_e}")
+
+        # Clear data_editor widget state so it reloads fresh from disk
+        st.session_state.pop("main_table", None)
+        st.success("✅ Saved!")
+        st.rerun()
+
+    # ── Exports ───────────────────────────────────────────────────────────────
+    st.markdown("### 📥 Export")
+    ec1, ec2, ec3 = st.columns(3)
+
+    today = datetime.date.today().isoformat()
+
+    with ec1:
+        to_order_df = df_show[df_show[COL_TO_ORDER] > 0].copy() if COL_TO_ORDER in df_show.columns else pd.DataFrame()
+        if not to_order_df.empty:
+            st.download_button(
+                "⬇️ Order List (CSV)",
+                data=to_order_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"order_list_{today}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.success("Nothing to order in current view.")
+
+    with ec2:
+        no_price_df = (
+            df_show[df_show[COL_UNIT_PRICE].isna()].copy()
+            if COL_UNIT_PRICE in df_show.columns
+            else pd.DataFrame()
+        )
+        if not no_price_df.empty:
+            st.download_button(
+                "⬇️ No-Price List (CSV)",
+                data=no_price_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"no_price_{today}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.success("All parts have prices.")
+
+    with ec3:
+        st.download_button(
+            "⬇️ Full View (CSV)",
+            data=df_show.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"bom_results_{today}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+with _tab_brd:
+    _combined_inv_brd = st.session_state.get("_combined_inv", inventory_df)
+    _brd_summary = get_brd_order_summary(bom_files, qty_map, _combined_inv_brd, prices_df)
+    if _brd_summary.empty:
+        st.info("No BRD sub-assemblies found in the selected systems, or no BRD sub-BOMs are loaded.")
+        st.caption("To see BRD cost breakdown, include BRD assembly BOMs in your combined BOM file.")
+    else:
+        _brd_total = _brd_summary["Order Cost $"].fillna(0).sum()
+        _brd_count = _brd_summary["BRD P/N"].nunique()
+        _bc1, _bc2 = st.columns(2)
+        _bc1.metric("BRD Assemblies", f"{_brd_count}")
+        _bc2.metric("💰 Total BRD Order Cost", f"${_brd_total:,.2f}")
+        st.markdown("---")
+        st.dataframe(
+            _brd_summary,
+            column_config={
+                "System":          st.column_config.TextColumn("System"),
+                "BRD P/N":         st.column_config.TextColumn("BRD P/N"),
+                "Description":     st.column_config.TextColumn("Description"),
+                "Qty/System":      st.column_config.NumberColumn("Qty/System", format="%.0f"),
+                "Total BRD Qty":   st.column_config.NumberColumn("Total BRD Qty", format="%d"),
+                "Order Cost $":    st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
+                "Note":            st.column_config.TextColumn("Note"),
+            },
+            hide_index=True,
+            use_container_width=True,
+        )
 
 # ── Assembly Drill-Down (P-type parts) ───────────────────────────────────────
 st.markdown("---")
