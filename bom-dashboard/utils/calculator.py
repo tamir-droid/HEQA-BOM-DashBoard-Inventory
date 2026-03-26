@@ -332,26 +332,25 @@ def get_brd_order_summary(
         )
         brd_rows_in_sys = sys_df[brd_mask]
 
-        seen_brd: set = set()
+        # Aggregate BRD quantities within this system — same BRD may appear in
+        # multiple rows (qty=1 each), so sum them instead of skipping duplicates.
+        import re as _re
+        brd_info_map: dict = {}   # vpn → {"qty": float, "desc": str}
         for _, brd_row in brd_rows_in_sys.iterrows():
             brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
-            # Only BRD VPNs: "BRD" + 6 digits + optional letter suffix
-            # e.g. BRD100700, BRD400004A, BRD400004B  (min 9 chars, max 10)
-            # Exclude VPNs ending in T (test/template boards)
-            import re as _re
             if not _re.match(r'^BRD\d{6}[A-Za-z]?$', brd_vpn):
                 continue
             if brd_vpn.upper().endswith('T'):
                 continue
-            if brd_vpn in seen_brd:
-                continue
-            seen_brd.add(brd_vpn)
+            _q = float(_pd.to_numeric(brd_row.get(BOM_QTY_COL, 0), errors="coerce") or 0)
+            if brd_vpn not in brd_info_map:
+                brd_info_map[brd_vpn] = {"qty": 0.0, "desc": str(brd_row.get(BOM_DESC_COL, ""))}
+            brd_info_map[brd_vpn]["qty"] += _q
 
-            brd_qty_in_sys = float(
-                _pd.to_numeric(brd_row.get(BOM_QTY_COL, 1), errors="coerce") or 1
-            )
+        for brd_vpn, _binfo in brd_info_map.items():
+            brd_qty_in_sys = _binfo["qty"] or 1.0   # fallback to 1 if BOM qty was 0/missing
             total_brd_qty = brd_qty_in_sys * sys_qty
-            brd_desc = str(brd_row.get(BOM_DESC_COL, ""))
+            brd_desc = _binfo["desc"]
 
             comp_df = _extract_brd_components(sys_df, brd_vpn)
 
