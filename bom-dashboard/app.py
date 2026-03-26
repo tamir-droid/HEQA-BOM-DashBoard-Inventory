@@ -18,6 +18,7 @@ from config import (
     PRICE_FILENAME,
     TYPE_FILENAME,
     COMBINED_BOM_FILENAME,
+    BRD_SUB_INV_FILENAME,
     TYPE_KEY_COL,
     TYPE_COL,
     SUPPORT_FILES,
@@ -913,7 +914,42 @@ with _tab_comp:
 
 with _tab_brd:
     _combined_inv_brd = st.session_state.get("_combined_inv", inventory_df)
-    _brd_summary = get_brd_order_summary(bom_files, qty_map, _combined_inv_brd, prices_df)
+
+    # Load subcontractor stock (same file used by BRD Assembly page)
+    def _load_sub_inv_map() -> dict:
+        _sp = DATA_DIR / BRD_SUB_INV_FILENAME
+        if not _sp.exists():
+            return {}
+        try:
+            import pandas as _pd2
+            try:
+                _sdf = _pd2.read_excel(_sp, sheet_name="Sheet1")
+            except Exception:
+                _sdf = _pd2.read_excel(_sp)
+            _sdf.columns = _sdf.columns.str.strip()
+            _kc = _qc = None
+            for _c in _sdf.columns:
+                _cs = str(_c).strip()
+                if _cs == INV_KEY_COL or _cs.lower() in ("heqa p.n", "vendor part number", 'מק"ט'):
+                    _kc = _c
+                if _cs == INV_QTY_COL or _cs.lower() in ("qty", "quantity", "כמות"):
+                    _qc = _c
+            if _kc is None:
+                _kc = _sdf.columns[0]
+            if _qc is None:
+                _qc = _sdf.columns[1] if len(_sdf.columns) > 1 else None
+            if _qc is None:
+                return {}
+            return {
+                str(r[_kc]).strip(): float(_pd2.to_numeric(r[_qc], errors="coerce") or 0)
+                for _, r in _sdf.iterrows()
+                if str(r[_kc]).strip() not in ("", "nan")
+            }
+        except Exception:
+            return {}
+
+    _sub_inv_map = _load_sub_inv_map()
+    _brd_summary = get_brd_order_summary(bom_files, qty_map, _combined_inv_brd, prices_df, sub_inv_map=_sub_inv_map)
     if _brd_summary.empty:
         st.info("No BRD sub-assemblies found in the selected systems, or no BRD sub-BOMs are loaded.")
         st.caption("To see BRD cost breakdown, include BRD assembly BOMs in your combined BOM file.")
@@ -950,13 +986,13 @@ with _tab_brd:
             _info_col, _exp_col = st.columns([2, 8])
             with _info_col:
                 st.markdown(
-                    f"<div style='padding-top:0.4rem;text-align:left;line-height:1.6'>"
-                    f"<span style='font-size:0.8rem;color:#555'>💰 Order: </span>"
-                    f"<span style='font-weight:600;font-size:0.85rem'>${_bord:,.2f}</span><br>"
+                    f"<div style='padding-top:0.4rem;text-align:left;line-height:1.8'>"
                     f"<span style='font-size:0.8rem;color:#555'>📦 Total BOM: </span>"
                     f"<span style='font-weight:600;font-size:0.85rem'>${_btot:,.2f}</span><br>"
-                    f"<span style='font-size:0.8rem;color:#555'>Qty: </span>"
-                    f"<span style='font-weight:700;font-size:0.95rem'>{_bqty}</span>"
+                    f"<span style='font-weight:700;font-size:0.95rem'>Qty: {_bqty}</span>"
+                    f"&nbsp;&nbsp;&nbsp;"
+                    f"<span style='font-size:0.8rem;color:#555'>💰 Order: </span>"
+                    f"<span style='font-weight:600;font-size:0.85rem'>${_bord:,.2f}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )

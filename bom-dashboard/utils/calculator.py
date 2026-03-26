@@ -259,6 +259,7 @@ def get_brd_order_summary(
     qty_map: dict,
     inventory_df,
     price_df,
+    sub_inv_map: dict = None,
 ):
     """Calculate per-BRD order cost (missing parts only) and total BOM cost.
 
@@ -309,6 +310,13 @@ def get_brd_order_summary(
             _v = _pd.to_numeric(_r.get(INV_QTY_COL, 0), errors="coerce")
             if _k and _k.lower() not in ("nan", "none", "") and _pd.notna(_v):
                 inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v)
+
+    # Add subcontractor stock on top of main inventory
+    if sub_inv_map:
+        for _k, _v in sub_inv_map.items():
+            _k = str(_k).strip()
+            if _k and _k.lower() not in ("nan", "none", ""):
+                inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v or 0)
 
     price_lookup: dict = {}
     if not price_df.empty and PRICE_KEY_COL in price_df.columns:
