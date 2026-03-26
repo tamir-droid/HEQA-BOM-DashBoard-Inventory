@@ -300,11 +300,15 @@ def get_brd_order_summary(
         return _pd.DataFrame(rows).reset_index(drop=True) if rows else _pd.DataFrame()
 
     # ── Build fast lookups ────────────────────────────────────────────────────
+    # Build inv_lookup by iterating rows (same approach as BRD Assembly page)
+    # to avoid silent failures that can occur with groupby on mixed-type columns.
     inv_lookup: dict = {}
-    if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
-        _inv = inventory_df.copy()
-        _inv[INV_QTY_COL] = _pd.to_numeric(_inv[INV_QTY_COL], errors="coerce").fillna(0)
-        inv_lookup = _inv.groupby(INV_KEY_COL)[INV_QTY_COL].sum().to_dict()
+    if not inventory_df.empty and INV_KEY_COL in inventory_df.columns and INV_QTY_COL in inventory_df.columns:
+        for _, _r in inventory_df.iterrows():
+            _k = str(_r[INV_KEY_COL]).strip()
+            _v = _pd.to_numeric(_r.get(INV_QTY_COL, 0), errors="coerce")
+            if _k and _k.lower() not in ("nan", "none", "") and _pd.notna(_v):
+                inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v)
 
     price_lookup: dict = {}
     if not price_df.empty and PRICE_KEY_COL in price_df.columns:
@@ -419,3 +423,162 @@ def get_brd_order_summary(
     )
 
     return grouped[["BRD P/N", "Description", "Systems", "Total BRD Qty", "Order Cost $", "Total BOM Cost $", "Note"]]
+
+
+def get_brd_components_detail(
+    bom_dfs: dict,
+    qty_map: dict,
+    inventory_df,
+    price_df,
+) -> dict:
+    """Return a dict {brd_vpn: DataFrame} — component rows for each BRD assembly.
+
+    Each DataFrame has columns:
+        VPN, Description, Manufacturer, MPN,
+        Qty/BRD, Required Qty, In Stock, To Order,
+        Unit Price $, Order Cost $, Total Cost $, Status
+    """
+    import pandas as _pd
+    import re as _re
+
+    def _parse_level(val) -> int:
+        s = str(val).strip().lstrip(".")
+        try:
+            return int(float(s))
+        except (ValueError, TypeError):
+            return 999
+
+    def _extract_brd_components(sys_df, brd_vpn: str):
+        rows = []
+        in_brd = False
+        brd_level = None
+        for _, row in sys_df.iterrows():
+            level = _parse_level(row.get(BOM_LEVEL_COL, 999))
+            vpn = str(row.get(BOM_VPN_COL, "")).strip()
+            if vpn == brd_vpn:
+                in_brd = True
+                brd_level = level
+                continue
+            if in_brd:
+                if not vpn or vpn.lower() == "nan":
+                    continue
+                if brd_level is not None and level <= brd_level:
+                    break
+                rows.append(row)
+        return _pd.DataFrame(rows).reset_index(drop=True) if rows else _pd.DataFrame()
+
+    # ── Lookups ───────────────────────────────────────────────────────────────
+    inv_lookup: dict = {}
+    if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
+        for _, _r in inventory_df.iterrows():
+            _k = str(_r[INV_KEY_COL]).strip()
+            _v = _pd.to_numeric(_r.get(INV_QTY_COL, 0), errors="coerce")
+            if _k and _k.lower() not in ("nan", "none", "") and _pd.notna(_v):
+                inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v)
+
+    price_lookup: dict = {}
+    if not price_df.empty and PRICE_KEY_COL in price_df.columns:
+        _pr = price_df[[PRICE_KEY_COL, PRICE_USD_COL]].copy()
+        _pr[PRICE_KEY_COL] = _pr[PRICE_KEY_COL].astype(str).str.strip()
+        _pr[PRICE_USD_COL] = _pd.to_numeric(_pr[PRICE_USD_COL], errors="coerce").fillna(0)
+        _pr = _pr[_pr[PRICE_USD_COL] > 0].drop_duplicates(subset=PRICE_KEY_COL)
+        price_lookup = _pr.set_index(PRICE_KEY_COL)[PRICE_USD_COL].to_dict()
+
+    brd_comp_rows: dict = {}  # brd_vpn -> list of row dicts
+
+    for sys_name, sys_df in bom_dfs.items():
+        if not str(sys_name).upper().startswith("SYS-"):
+            continue
+        sys_qty = int(qty_map.get(sys_name, 0))
+        if sys_qty <= 0:
+            continue
+
+        brd_mask = sys_df[BOM_VPN_COL].astype(str).str.strip().str.upper().str.startswith("BRD")
+        seen_brd: set = set()
+
+        for _, brd_row in sys_df[brd_mask].iterrows():
+            brd_vpn = str(brd_row[BOM_VPN_COL]).strip()
+            if not _re.match(r'^BRD\d{6}[A-Za-z]?$', brd_vpn):
+                continue
+            if brd_vpn.upper().endswith('T'):
+                continue
+            if brd_vpn in seen_brd:
+                continue
+            seen_brd.add(brd_vpn)
+
+            brd_qty_in_sys = float(_pd.to_numeric(brd_row.get(BOM_QTY_COL, 1), errors="coerce") or 1)
+            total_brd_qty = brd_qty_in_sys * sys_qty
+
+            comp_df = _extract_brd_components(sys_df, brd_vpn)
+            if comp_df.empty:
+                continue
+
+            for _, comp in comp_df.iterrows():
+                comp_vpn = str(comp.get(BOM_VPN_COL, "")).strip()
+                if not comp_vpn or comp_vpn.lower() == "nan":
+                    continue
+                comp_qty = float(_pd.to_numeric(comp.get(BOM_QTY_COL, 0), errors="coerce") or 0)
+                required_qty = comp_qty * total_brd_qty
+                price = float(price_lookup.get(comp_vpn, 0))
+                stock = float(inv_lookup.get(comp_vpn, 0))
+                to_order = max(0.0, required_qty - stock)
+                order_cost = to_order * price if price > 0 else float("nan")
+                total_cost = required_qty * price if price > 0 else float("nan")
+
+                if to_order > 0 and price <= 0:
+                    status = "🔴 Missing ⚠️ No Price"
+                elif to_order > 0:
+                    status = "🔴 Missing"
+                elif price <= 0:
+                    status = "⚠️ No Price"
+                else:
+                    status = "✅ In Stock"
+
+                brd_comp_rows.setdefault(brd_vpn, []).append({
+                    "VPN": comp_vpn,
+                    "Description": str(comp.get(BOM_DESC_COL, "")),
+                    "Manufacturer": str(comp.get(BOM_MFR_COL, "")),
+                    "MPN": str(comp.get(BOM_MPN_COL, "")),
+                    "Qty/BRD": comp_qty,
+                    "Required Qty": required_qty,
+                    "In Stock": stock,
+                    "To Order": to_order,
+                    "Unit Price $": price if price > 0 else float("nan"),
+                    "Order Cost $": order_cost,
+                    "Total Cost $": total_cost,
+                    "Status": status,
+                })
+
+    # Convert lists → DataFrames, aggregate duplicate VPNs
+    result: dict = {}
+    for brd_vpn, rows in brd_comp_rows.items():
+        df = _pd.DataFrame(rows)
+        agg = (
+            df.groupby("VPN", sort=False)
+            .agg(
+                Description=("Description", "first"),
+                Manufacturer=("Manufacturer", "first"),
+                MPN=("MPN", "first"),
+                Qty_BRD=("Qty/BRD", "first"),
+                Required_Qty=("Required Qty", "sum"),
+                In_Stock=("In Stock", "first"),
+                To_Order=("To Order", "sum"),
+                Unit_Price=("Unit Price $", "first"),
+                Order_Cost=("Order Cost $", "sum"),
+                Total_Cost=("Total Cost $", "sum"),
+                Status=("Status", "first"),
+            )
+            .reset_index()
+            .rename(columns={
+                "Qty_BRD": "Qty/BRD",
+                "Required_Qty": "Required Qty",
+                "In_Stock": "In Stock",
+                "To_Order": "To Order",
+                "Unit_Price": "Unit Price $",
+                "Order_Cost": "Order Cost $",
+                "Total_Cost": "Total Cost $",
+            })
+        )
+        result[brd_vpn] = agg
+
+    return result

@@ -46,6 +46,7 @@ from utils.calculator import (
     calculate_results,
     get_kpis,
     get_brd_order_summary,
+    get_brd_components_detail,
     COL_REQUIRED,
     COL_IN_STOCK,
     COL_TO_ORDER,
@@ -417,6 +418,18 @@ st.divider()
 
 st.markdown("""<style>
 .qty-label { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+/* Enlarge tab labels 2× — multiple selectors for all Streamlit versions */
+.stTabs [data-baseweb="tab"] p,
+.stTabs [data-baseweb="tab"] div,
+.stTabs [data-baseweb="tab"] span,
+button[data-baseweb="tab"] p,
+button[data-baseweb="tab"],
+[role="tab"] p,
+[role="tab"] {
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    line-height: 1.4 !important;
+}
 </style>""", unsafe_allow_html=True)
 
 qty_map: dict[str, int] = {}
@@ -508,6 +521,9 @@ col_btn, _ = st.columns([1, 5])
 with col_btn:
     calc_clicked = st.button("🔢 Calculate", type="primary", use_container_width=True)
 
+if qty_map and not any(q > 0 for q in qty_map.values()):
+    st.session_state.pop(SS_RESULTS, None)
+
 if calc_clicked:
     if not any(q > 0 for q in qty_map.values()):
         st.warning("Set at least one production quantity before calculating.")
@@ -560,7 +576,7 @@ c2.metric("✅ In Stock", f"{kpis['in_stock_count']:,}")
 c3.metric("🔴 Missing", f"{kpis['missing_count']:,}")
 c4.metric("Availability", f"{kpis['availability_pct']:.1f}%")
 c5.metric("⚠️ No Price", f"{kpis['no_price_count']:,}")
-c6.metric("Order Cost $", f"${kpis['order_cost']:,.2f}")
+c6.metric("Order Cost for All (Components & BRD)", f"${kpis['order_cost']:,.2f}")
 
 st.markdown("---")
 
@@ -677,9 +693,9 @@ with _tab_comp:
             _order_cost = pd.to_numeric(df_show[COL_ORDER_COST], errors="coerce").sum()
             st.metric("💰 Order Cost (filtered)", f"${_order_cost:,.2f}")
     with _cost_col2:
-        if COL_TOTAL_COST in df_show.columns:
-            _total_cost = pd.to_numeric(df_show[COL_TOTAL_COST], errors="coerce").sum()
-            st.metric("📦 Total BOM Cost (filtered)", f"${_total_cost:,.2f}")
+        if COL_TOTAL_COST in results.columns:
+            _total_cost = pd.to_numeric(results[COL_TOTAL_COST], errors="coerce").sum()
+            st.metric("📦 Total BOM Cost", f"${_total_cost:,.2f}")
     with _save_btn_col:
         st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
         if st.button("💾 Save Changes", use_container_width=True, key="save_top"):
@@ -739,9 +755,9 @@ with _tab_comp:
         "MFR Name 2": st.column_config.TextColumn("MFR Name 2"),
         "MPN 2":      st.column_config.TextColumn("MPN 2"),
         "Type":         st.column_config.TextColumn("Type", width="small"),
-        COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%d"),
-        COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%d"),
-        COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%d"),
+        COL_REQUIRED:   st.column_config.NumberColumn("Required", format="%g"),
+        COL_IN_STOCK:   st.column_config.NumberColumn("In Stock", format="%g"),
+        COL_TO_ORDER:   st.column_config.NumberColumn("To Order", format="%g"),
         COL_UNIT_PRICE: st.column_config.NumberColumn("Unit $", format="$%.4f"),
         COL_TOTAL_COST: st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
         COL_ORDER_COST: st.column_config.NumberColumn("Order Cost $", format="$%.4f"),
@@ -906,24 +922,69 @@ with _tab_brd:
         _brd_bom_total   = _brd_summary["Total BOM Cost $"].fillna(0).sum()
         _brd_count       = _brd_summary["BRD P/N"].nunique()
         _bc1, _bc2, _bc3 = st.columns(3)
-        _bc1.metric("BRD Assemblies", f"{_brd_count}")
-        _bc2.metric("💰 Order Cost (missing)", f"${_brd_order_total:,.2f}")
-        _bc3.metric("📦 Total BOM Cost", f"${_brd_bom_total:,.2f}")
-        st.markdown("---")
-        st.dataframe(
-            _brd_summary,
-            column_config={
-                "BRD P/N":          st.column_config.TextColumn("BRD P/N"),
-                "Description":      st.column_config.TextColumn("Description"),
-                "Systems":          st.column_config.TextColumn("Systems"),
-                "Total BRD Qty":    st.column_config.NumberColumn("Total BRD Qty", format="%d"),
-                "Order Cost $":     st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
-                "Total BOM Cost $": st.column_config.NumberColumn("Total BOM Cost $", format="$%.2f"),
-                "Note":             st.column_config.TextColumn("Note"),
-            },
-            hide_index=True,
-            use_container_width=True,
+        _metric_card = (
+            "<div style='border:1px solid #e0e0e0;border-radius:8px;padding:10px 16px;'>"
+            "<div style='font-size:0.85rem;color:#555;font-weight:500;margin-bottom:2px'>{label}</div>"
+            "<div style='font-size:1.6rem;font-weight:700;color:#1a1a2e;line-height:1.2'>{value}</div>"
+            "</div>"
         )
+        with _bc1:
+            st.markdown(_metric_card.format(label="BRD Assemblies", value=_brd_count), unsafe_allow_html=True)
+        with _bc2:
+            st.markdown(_metric_card.format(label="💰 Order Cost (missing)", value=f"${_brd_order_total:,.2f}"), unsafe_allow_html=True)
+        with _bc3:
+            st.markdown(_metric_card.format(label="📦 Total BOM Cost", value=f"${_brd_bom_total:,.2f}"), unsafe_allow_html=True)
+        st.markdown("---")
+        _brd_details = get_brd_components_detail(bom_files, qty_map, _combined_inv_brd, prices_df)
+        for _, _brow in _brd_summary.iterrows():
+            _bvpn  = _brow["BRD P/N"]
+            _bdesc = _brow["Description"]
+            _bord  = _brow["Order Cost $"]
+            _btot  = _brow["Total BOM Cost $"]
+            _bqty  = int(_brow["Total BRD Qty"])
+            _bsys  = _brow["Systems"]
+            _label = (
+                f"🔌 {_bvpn}  —  {_bdesc}   |   "
+                f"Systems: {_bsys}"
+            )
+            _info_col, _exp_col = st.columns([2, 8])
+            with _info_col:
+                st.markdown(
+                    f"<div style='padding-top:0.4rem;text-align:left;line-height:1.6'>"
+                    f"<span style='font-size:0.8rem;color:#555'>💰 Order: </span>"
+                    f"<span style='font-weight:600;font-size:0.85rem'>${_bord:,.2f}</span><br>"
+                    f"<span style='font-size:0.8rem;color:#555'>📦 Total BOM: </span>"
+                    f"<span style='font-weight:600;font-size:0.85rem'>${_btot:,.2f}</span><br>"
+                    f"<span style='font-size:0.8rem;color:#555'>Qty: </span>"
+                    f"<span style='font-weight:700;font-size:0.95rem'>{_bqty}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with _exp_col:
+                with st.expander(_label):
+                    _det = _brd_details.get(_bvpn, pd.DataFrame())
+                    if _det.empty:
+                        st.info("No components found under this BRD assembly.")
+                    else:
+                        st.dataframe(
+                            _det,
+                            column_config={
+                                "VPN":           st.column_config.TextColumn("VPN"),
+                                "Description":   st.column_config.TextColumn("Description"),
+                                "Manufacturer":  st.column_config.TextColumn("Manufacturer"),
+                                "MPN":           st.column_config.TextColumn("MPN"),
+                                "Qty/BRD":       st.column_config.NumberColumn("Qty/BRD", format="%.2f"),
+                                "Required Qty":  st.column_config.NumberColumn("Required Qty", format="%g"),
+                                "In Stock":      st.column_config.NumberColumn("In Stock", format="%g"),
+                                "To Order":      st.column_config.NumberColumn("To Order", format="%g"),
+                                "Unit Price $":  st.column_config.NumberColumn("Unit Price $", format="$%.4f"),
+                                "Order Cost $":  st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
+                                "Total Cost $":  st.column_config.NumberColumn("Total Cost $", format="$%.2f"),
+                                "Status":        st.column_config.TextColumn("Status"),
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                        )
 
 # ── Assembly Drill-Down (P-type parts) ───────────────────────────────────────
 st.markdown("---")

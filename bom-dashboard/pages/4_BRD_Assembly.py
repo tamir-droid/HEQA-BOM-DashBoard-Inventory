@@ -1,8 +1,8 @@
 """BRD Assembly Viewer — HEQA.
 
-Select a BRD assembly and view all its sub-components from the BOM,
-including Find Number, Level, Qty, cost, inventory status, subcontractor stock,
-and PO / followup tracking (shared with the Main Dashboard).
+Select one or more BRD assemblies (with individual quantities) and view all
+sub-components from the BOM hierarchy, including cost, inventory status,
+subcontractor stock and PO / followup tracking.
 """
 
 import datetime
@@ -47,6 +47,16 @@ st.markdown(
     "<style>[data-testid=\"stSidebarNav\"] { display: none; }</style>",
     unsafe_allow_html=True,
 )
+
+# ── Persist UI state across navigation (must be before any st.stop()) ──────────
+for _pkey, _pdef in [
+    ("brd_sel_brds",     []),
+    ("brd_type_filter",  "All"),
+    ("brd_status_filter","All"),
+    ("brd_search",       ""),
+]:
+    if _pkey not in st.session_state:
+        st.session_state[_pkey] = _pdef
 
 # ── Navigation ─────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -144,7 +154,6 @@ st.session_state[SS_FOLLOWUP] = load_followup(DATA_DIR)
 import base64 as _b64
 
 def _pcba_title_html() -> str:
-    """Return an HTML heading with inline PCBA icon if available."""
     if PCBA_ICON_PATH.exists():
         _img_b64 = _b64.b64encode(PCBA_ICON_PATH.read_bytes()).decode()
         return (
@@ -161,10 +170,10 @@ if LOGO_PATH.exists():
         st.image(LOGO_PATH.read_bytes(), width=180)
     with title_col:
         st.markdown(_pcba_title_html(), unsafe_allow_html=True)
-        st.caption("Select a BRD assembly to view all sub-components as defined in the BOM hierarchy.")
+        st.caption("Select one or more BRD assemblies and set quantities to view combined sub-components.")
 else:
     st.markdown(_pcba_title_html(), unsafe_allow_html=True)
-    st.caption("Select a BRD assembly to view all sub-components as defined in the BOM hierarchy.")
+    st.caption("Select one or more BRD assemblies and set quantities to view combined sub-components.")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -230,7 +239,6 @@ def _load_type_map() -> dict[str, str]:
 
 
 def _get_brd_description(bom_files: dict, brd_vpn: str) -> str:
-    """Return the Description of the BRD assembly row from any BOM that contains it."""
     for df in bom_files.values():
         if BOM_VPN_COL not in df.columns or BOM_DESC_COL not in df.columns:
             continue
@@ -340,45 +348,61 @@ if not brd_assemblies:
     st.warning("⚠️ No BRD-prefixed assemblies found in the uploaded BOM files.")
     st.stop()
 
-# ── Selector + BRD Qty + Description ──────────────────────────────────────────
-sel_col, qty_col_ui, desc_col = st.columns([1.2, 0.6, 5])
-with sel_col:
-    st.caption("Select BRD Assembly")
-    sel_brd = st.selectbox(
-        "Select BRD Assembly",
-        options=sorted(brd_assemblies.keys()),
-        label_visibility="collapsed",
-        help="Shows all sub-components of the selected BRD assembly.",
-    )
-with qty_col_ui:
-    st.caption("BRD Qty")
-    brd_qty = st.number_input(
-        "BRD Qty", min_value=1, value=1, step=1,
-        label_visibility="collapsed",
-        key=f"brd_qty_{sel_brd}",
-        help="Number of BRD assemblies to build — multiplies all quantities and costs.",
-    )
-with desc_col:
-    _brd_desc = _get_brd_description(bom_files, sel_brd)
-    if _brd_desc:
-        st.markdown(
-            f"<div style='margin-top:1.9rem;font-size:1rem;font-weight:600;color:#1a1a2e'>"
-            f"📋 {_brd_desc}</div>",
-            unsafe_allow_html=True,
+# ── Multi-select BRD ───────────────────────────────────────────────────────────
+st.caption("Select BRD Assemblies")
+_all_brd_opts = sorted(brd_assemblies.keys())
+if "brd_sel_brds" not in st.session_state:
+    st.session_state["brd_sel_brds"] = _all_brd_opts[:1] if _all_brd_opts else []
+sel_brds: list[str] = st.multiselect(
+    "Select BRD Assemblies",
+    options=_all_brd_opts,
+    label_visibility="collapsed",
+    help="Select one or more BRD assemblies. Set individual quantities below.",
+    key="brd_sel_brds",
+)
+
+if not sel_brds:
+    st.info("👆 Select one or more BRD assemblies above.")
+    st.stop()
+
+# ── Per-BRD Qty inputs ─────────────────────────────────────────────────────────
+brd_qty_map: dict[str, int] = {}
+_n = len(sel_brds)
+_qty_cols_ui = st.columns(min(_n, 4))
+for _i, _bvpn in enumerate(sel_brds):
+    with _qty_cols_ui[_i % min(_n, 4)]:
+        _desc = _get_brd_description(bom_files, _bvpn)
+        _short = (_desc[:38] + "…") if len(_desc) > 38 else _desc
+        st.caption(f"**{_bvpn}**" + (f"  {_short}" if _short else ""))
+        _qty_key = f"brd_qty_{_bvpn}"
+        if _qty_key not in st.session_state:
+            st.session_state[_qty_key] = 1
+        brd_qty_map[_bvpn] = st.number_input(
+            f"Qty {_bvpn}", min_value=1, step=1,
+            label_visibility="collapsed",
+            key=_qty_key,
+            help="Number of this BRD to build — multiplies all quantities and costs.",
         )
 
-# ── Collect components ─────────────────────────────────────────────────────────
+# ── Collect components across all selected BRDs ────────────────────────────────
+# Use only the FIRST BOM file that has components for each BRD to avoid
+# counting the same sub-components multiple times (BRD appears in N system BOMs).
 all_components: list[pd.DataFrame] = []
-for bom_name in brd_assemblies.get(sel_brd, []):
-    df = bom_files[bom_name]
-    comp_df = _get_components(df, sel_brd)
-    if not comp_df.empty:
-        comp_df = comp_df.copy()
-        comp_df["BOM File"] = bom_name
-        all_components.append(comp_df)
+for _sbrd in sel_brds:
+    _sbrd_qty = brd_qty_map[_sbrd]
+    for bom_name in brd_assemblies.get(_sbrd, []):
+        df = bom_files[bom_name]
+        comp_df = _get_components(df, _sbrd)
+        if not comp_df.empty:
+            comp_df = comp_df.copy()
+            comp_df["BOM File"]  = bom_name
+            comp_df["_sel_brd"]  = _sbrd
+            comp_df["_brd_qty"]  = _sbrd_qty
+            all_components.append(comp_df)
+            break  # stop after first BOM file with components — prevents duplicate counting
 
 if not all_components:
-    st.info(f"No sub-components found under **{sel_brd}** in any BOM file.")
+    st.info(f"No sub-components found under the selected BRD(s) in any BOM file.")
     st.stop()
 
 combined = pd.concat(all_components, ignore_index=True)
@@ -407,9 +431,8 @@ for col in [BOM_FIND_NUM_COL, BOM_LEVEL_COL, BOM_VPN_COL, BOM_DESC_COL,
     if col in combined.columns:
         disp_cols.append(col)
 
-disp = combined[disp_cols].copy()
-disp = disp.drop_duplicates(subset=[BOM_VPN_COL])
-disp = disp.rename(columns={
+raw = combined[disp_cols + ["_sel_brd", "_brd_qty"]].copy()
+raw = raw.rename(columns={
     BOM_FIND_NUM_COL: "Find #",
     BOM_LEVEL_COL:    "Level",
     BOM_VPN_COL:      "Heqa P.N",
@@ -419,16 +442,33 @@ disp = disp.rename(columns={
     BOM_QTY_COL:      "Qty (BOM)",
 })
 
-# ── Enrich columns ─────────────────────────────────────────────────────────────
-if "Heqa P.N" in disp.columns:
-    disp["In Stock"]     = disp["Heqa P.N"].map(lambda v: inv_map.get(str(v).strip(), 0))
-    disp["Unit Price $"] = disp["Heqa P.N"].map(lambda v: price_map.get(str(v).strip()))
-    disp["Part Type"]    = disp["Heqa P.N"].map(lambda v: type_map.get(str(v).strip(), "—"))
-    if has_sub_inv:
-        disp["Sub Stock"] = disp["Heqa P.N"].map(lambda v: sub_inv_map.get(str(v).strip(), 0))
+raw["Qty (BOM)"] = pd.to_numeric(raw["Qty (BOM)"], errors="coerce").fillna(0)
+raw["_row_req"]  = raw["Qty (BOM)"] * raw["_brd_qty"]
 
-disp["Qty (BOM)"]    = pd.to_numeric(disp["Qty (BOM)"], errors="coerce").fillna(0)
-disp["Qty Required"] = disp["Qty (BOM)"] * brd_qty
+# Aggregate duplicate VPNs (same part used in multiple BRDs or BOM files)
+disp = (
+    raw.groupby("Heqa P.N", sort=False)
+    .agg(
+        **{
+            "Find #":      ("Find #",    "first"),
+            "Level":       ("Level",     "first"),
+            "Description": ("Description","first"),
+            "MFR Name":    ("MFR Name",  "first"),
+            "MPN":         ("MPN",       "first"),
+            "Qty (BOM)":   ("Qty (BOM)", "first"),
+            "Qty Required":("_row_req",  "sum"),
+            "BRD(s)":      ("_sel_brd",  lambda x: ", ".join(sorted(x.unique()))),
+        }
+    )
+    .reset_index()
+)
+
+# ── Enrich columns ─────────────────────────────────────────────────────────────
+disp["In Stock"]     = disp["Heqa P.N"].map(lambda v: inv_map.get(str(v).strip(), 0))
+disp["Unit Price $"] = disp["Heqa P.N"].map(lambda v: price_map.get(str(v).strip()))
+disp["Part Type"]    = disp["Heqa P.N"].map(lambda v: type_map.get(str(v).strip(), "—"))
+if has_sub_inv:
+    disp["Sub Stock"] = disp["Heqa P.N"].map(lambda v: sub_inv_map.get(str(v).strip(), 0))
 
 # ── PO / Followup columns ──────────────────────────────────────────────────────
 def _order_status(vpn: str) -> str:
@@ -454,7 +494,6 @@ disp["Qty Ordered"]  = pd.to_numeric(
 # ── Cost columns ───────────────────────────────────────────────────────────────
 disp["Total Cost $"] = disp["Unit Price $"] * disp["Qty Required"]
 
-# NA in PO # → zero out cost
 _na_mask = disp["PO #"].str.strip().str.upper() == "NA"
 disp.loc[_na_mask, "Total Cost $"] = 0
 
@@ -505,12 +544,14 @@ _total    = len(disp)
 _missing  = (disp["Status"] == "🔴 Missing").sum()
 _in_stock = (disp["Status"] == "✅ In Stock").sum()
 _partial  = (disp["Status"] == "🟡 Partial").sum()
-_bom_files = ", ".join(brd_assemblies.get(sel_brd, []))
 _sub_note  = f" &nbsp;|&nbsp; 🏭 Sub: **{len(sub_inv_map):,}** parts" if has_sub_inv else ""
+_brd_summary_str = "  |  ".join(
+    f"**{b}** ×{brd_qty_map[b]}" for b in sel_brds
+)
 st.markdown(
-    f"**{sel_brd}** → **{_total}** components &nbsp;|&nbsp; "
-    f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}  \n"
-    f"<small>Found in: {_bom_files}</small>",
+    f"{_brd_summary_str}  \n"
+    f"**{_total}** components &nbsp;|&nbsp; "
+    f"✅ {_in_stock} &nbsp; 🟡 {_partial} &nbsp; 🔴 {_missing}{_sub_note}",
     unsafe_allow_html=True,
 )
 
@@ -522,12 +563,11 @@ _f1, _f2, _f3 = st.columns([2, 2, 3])
 
 _all_types    = sorted(disp["Part Type"].dropna().unique().tolist()) if "Part Type" in disp.columns else []
 _type_options = ["All"] + _all_types
+
 with _f1:
     st.caption("Part Type")
-    _default_type = "R" if "R" in _all_types else "All"
     sel_type = st.selectbox(
         "Part Type", _type_options,
-        index=_type_options.index(_default_type) if _default_type in _type_options else 0,
         label_visibility="collapsed", key="brd_type_filter",
     )
 
@@ -536,7 +576,6 @@ with _f2:
     sel_status = st.selectbox(
         "Status",
         ["All", "🔴 Missing", "🟠 Tracking", "🟡 Partial", "✅ In Stock"],
-        index=1,
         label_visibility="collapsed", key="brd_status_filter",
     )
 
@@ -570,16 +609,20 @@ if search_q:
     filt = filt[mask]
 
 # ── Cost metrics + Save button ─────────────────────────────────────────────────
-_order_cost     = filt.loc[filt["Status"].isin(["🔴 Missing", "🟡 Partial"]) & ~_na_mask.reindex(filt.index, fill_value=False), "Total Cost $"].sum(skipna=True)
-_total_bom_cost = filt["Total Cost $"].sum(skipna=True)
+_order_cost     = filt.loc[
+    filt["Status"].isin(["🔴 Missing", "🟡 Partial"]) &
+    ~_na_mask.reindex(filt.index, fill_value=False),
+    "Total Cost $"
+].sum(skipna=True)
+_total_bom_cost = disp["Total Cost $"].sum(skipna=True)   # always unfiltered
 
 _mc1, _mc2, _mc3, _save_col = st.columns([2, 2, 2, 1])
 with _mc1:
-    st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts  |  BRD Qty: **×{brd_qty}**")
+    st.caption(f"Showing **{len(filt)}** of **{len(disp)}** parts")
 with _mc2:
     st.metric("🔥 Order Cost (filtered)", f"${_order_cost:,.2f}")
 with _mc3:
-    st.metric("💰 Total BOM Cost (filtered)", f"${_total_bom_cost:,.2f}")
+    st.metric("💰 Total BOM Cost", f"${_total_bom_cost:,.2f}")
 with _save_col:
     st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
     if st.button("💾 Save Changes", use_container_width=True, key="brd_save_top"):
@@ -595,7 +638,7 @@ st.caption(
 # ── Column order ───────────────────────────────────────────────────────────────
 _col_order = [
     "●", "Find #", "Level", "Heqa P.N", "Description", "MFR Name", "MPN",
-    "Part Type", "Qty (BOM)", "Qty Required", "In Stock",
+    "Part Type", "BRD(s)", "Qty (BOM)", "Qty Required", "In Stock",
     "Sub Stock",
     "Unit Price $", "Total Cost $",
     "Order Status", "PO #", "Due Date", "Qty Ordered",
@@ -613,10 +656,11 @@ _col_cfg: dict = {
     "MFR Name":     st.column_config.TextColumn("MFR Name"),
     "MPN":          st.column_config.TextColumn("MPN"),
     "Part Type":    st.column_config.TextColumn("Type", width="small"),
+    "BRD(s)":       st.column_config.TextColumn("BRD(s)", help="BRD assemblies that use this component"),
     "Qty (BOM)":    st.column_config.NumberColumn("Qty (BOM)", format="%g", width="small"),
-    "Qty Required": st.column_config.NumberColumn(f"Qty ×{brd_qty}", format="%g", width="small"),
+    "Qty Required": st.column_config.NumberColumn("Qty Required", format="%g", width="small"),
     "In Stock":     st.column_config.NumberColumn("In Stock", format="%g", width="small"),
-    "Sub Stock":    st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small"),
+    "Sub Stock":    st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small", min_value=0, step=1),
     "Unit Price $": st.column_config.NumberColumn("Unit Price $", format="$%.4f"),
     "Total Cost $": st.column_config.NumberColumn("Total Cost $", format="$%.4f"),
     "Order Status": st.column_config.TextColumn("Order Status", width="small"),
@@ -627,7 +671,7 @@ _col_cfg: dict = {
 }
 
 # ── Editable table ─────────────────────────────────────────────────────────────
-_editable = {"PO #", "Due Date", "Qty Ordered"}
+_editable = {"PO #", "Due Date", "Qty Ordered", "Sub Stock"}
 _disabled  = [c for c in _display_cols if c not in _editable]
 
 edited_df = st.data_editor(
@@ -680,14 +724,44 @@ if st.session_state.pop("_brd_do_save", False):
 
     st.session_state[SS_FOLLOWUP] = _fup
     save_followup(DATA_DIR, _fup)
-    st.session_state.pop("brd_table", None)   # clear widget state
+
+    # ── Update Sub Stock (Subcontractor Inventory) ────────────────────────────
+    if "Sub Stock" in edited_df.columns:
+        _sub_path = DATA_DIR / BRD_SUB_INV_FILENAME
+        _current_sub = dict(sub_inv_map)
+        _sub_changed = False
+        for _, _row in edited_df.iterrows():
+            _vpn = str(_row.get("Heqa P.N", "")).strip()
+            if not _vpn or _vpn.lower() == "nan":
+                continue
+            _new_sub = pd.to_numeric(_row.get("Sub Stock", None), errors="coerce")
+            _old_sub = float(sub_inv_map.get(_vpn, 0))
+            if pd.notna(_new_sub) and float(_new_sub) != _old_sub:
+                _current_sub[_vpn] = float(_new_sub)
+                _sub_changed = True
+        if _sub_changed:
+            _sub_df = pd.DataFrame([
+                {INV_KEY_COL: k, INV_QTY_COL: v}
+                for k, v in _current_sub.items()
+                if v > 0
+            ])
+            try:
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                with pd.ExcelWriter(_sub_path, engine="openpyxl") as _w:
+                    _sub_df.to_excel(_w, sheet_name="Sheet1", index=False)
+                st.cache_data.clear()
+            except Exception as _sub_err:
+                st.warning(f"⚠️ Could not update subcontractor inventory: {_sub_err}")
+
+    st.session_state.pop("brd_table", None)
     st.success("✅ Saved!")
     st.rerun()
 
 # ── Export ─────────────────────────────────────────────────────────────────────
+_export_name = "_".join(sel_brds)
 st.download_button(
     "⬇️ Export to CSV",
     data=filt[_display_cols].to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"BRD_{sel_brd}_{datetime.date.today()}.csv",
+    file_name=f"BRD_{_export_name}_{datetime.date.today()}.csv",
     mime="text/csv",
 )
