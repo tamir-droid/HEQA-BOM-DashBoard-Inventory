@@ -1012,7 +1012,7 @@ with _tab_brd:
                                 "Qty/BRD":       st.column_config.NumberColumn("Qty/BRD", format="%.2f"),
                                 "Required Qty":  st.column_config.NumberColumn("Required Qty", format="%g"),
                                 "In Stock":      st.column_config.NumberColumn("In Stock", format="%g"),
-                                "Sub Stc":       st.column_config.NumberColumn("Sub Stc", format="%g"),
+                                "Sub Stc":       st.column_config.NumberColumn("Sub Stock 🏭", format="%g", width="small"),
                                 "To Order":      st.column_config.NumberColumn("To Order", format="%g"),
                                 "Unit Price $":  st.column_config.NumberColumn("Unit Price $", format="$%.4f"),
                                 "Order Cost $":  st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
