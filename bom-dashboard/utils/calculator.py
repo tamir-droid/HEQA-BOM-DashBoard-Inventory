@@ -476,23 +476,26 @@ def get_brd_components_detail(
         return _pd.DataFrame(rows).reset_index(drop=True) if rows else _pd.DataFrame()
 
     # ── Lookups ───────────────────────────────────────────────────────────────
-    inv_lookup: dict = {}
+    main_inv_lookup: dict = {}
     if not inventory_df.empty and INV_KEY_COL in inventory_df.columns:
         for _, _r in inventory_df.iterrows():
             _k = str(_r[INV_KEY_COL]).strip()
             _v = _pd.to_numeric(_r.get(INV_QTY_COL, 0), errors="coerce")
             if _k and _k.lower() not in ("nan", "none", "") and _pd.notna(_v):
-                inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v)
+                main_inv_lookup[_k] = main_inv_lookup.get(_k, 0) + float(_v)
 
-    # Add subcontractor stock
+    # Subcontractor stock — kept separate so columns show correctly
     sub_lookup: dict = {}
     if sub_inv_map:
         for _k, _v in sub_inv_map.items():
             _k = str(_k).strip()
             if _k and _k.lower() not in ("nan", "none", ""):
-                _qty = float(_v or 0)
-                inv_lookup[_k] = inv_lookup.get(_k, 0) + _qty
-                sub_lookup[_k] = _qty
+                sub_lookup[_k] = float(_v or 0)
+
+    # Combined lookup used for To Order calculation
+    inv_lookup: dict = {k: v for k, v in main_inv_lookup.items()}
+    for _k, _v in sub_lookup.items():
+        inv_lookup[_k] = inv_lookup.get(_k, 0) + _v
 
     price_lookup: dict = {}
     if not price_df.empty and PRICE_KEY_COL in price_df.columns:
@@ -538,8 +541,10 @@ def get_brd_components_detail(
                 comp_qty = float(_pd.to_numeric(comp.get(BOM_QTY_COL, 0), errors="coerce") or 0)
                 required_qty = comp_qty * total_brd_qty
                 price = float(price_lookup.get(comp_vpn, 0))
-                stock = float(inv_lookup.get(comp_vpn, 0))
-                to_order = max(0.0, required_qty - stock)
+                main_stk = float(main_inv_lookup.get(comp_vpn, 0))
+                sub_stk  = float(sub_lookup.get(comp_vpn, 0))
+                total_stk = main_stk + sub_stk
+                to_order = max(0.0, required_qty - total_stk)
                 order_cost = to_order * price if price > 0 else float("nan")
                 total_cost = required_qty * price if price > 0 else float("nan")
 
@@ -559,8 +564,8 @@ def get_brd_components_detail(
                     "MPN": str(comp.get(BOM_MPN_COL, "")),
                     "Qty/BRD": comp_qty,
                     "Required Qty": required_qty,
-                    "In Stock": stock,
-                    "Sub Stc": sub_lookup.get(comp_vpn, 0),
+                    "In Stock": main_stk,
+                    "Sub Stc": sub_stk,
                     "To Order": to_order,
                     "Unit Price $": price if price > 0 else float("nan"),
                     "Order Cost $": order_cost,
