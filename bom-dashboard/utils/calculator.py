@@ -437,6 +437,7 @@ def get_brd_components_detail(
     qty_map: dict,
     inventory_df,
     price_df,
+    sub_inv_map: dict = None,
 ) -> dict:
     """Return a dict {brd_vpn: DataFrame} — component rows for each BRD assembly.
 
@@ -482,6 +483,16 @@ def get_brd_components_detail(
             _v = _pd.to_numeric(_r.get(INV_QTY_COL, 0), errors="coerce")
             if _k and _k.lower() not in ("nan", "none", "") and _pd.notna(_v):
                 inv_lookup[_k] = inv_lookup.get(_k, 0) + float(_v)
+
+    # Add subcontractor stock
+    sub_lookup: dict = {}
+    if sub_inv_map:
+        for _k, _v in sub_inv_map.items():
+            _k = str(_k).strip()
+            if _k and _k.lower() not in ("nan", "none", ""):
+                _qty = float(_v or 0)
+                inv_lookup[_k] = inv_lookup.get(_k, 0) + _qty
+                sub_lookup[_k] = _qty
 
     price_lookup: dict = {}
     if not price_df.empty and PRICE_KEY_COL in price_df.columns:
@@ -549,6 +560,7 @@ def get_brd_components_detail(
                     "Qty/BRD": comp_qty,
                     "Required Qty": required_qty,
                     "In Stock": stock,
+                    "Sub Stc": sub_lookup.get(comp_vpn, 0),
                     "To Order": to_order,
                     "Unit Price $": price if price > 0 else float("nan"),
                     "Order Cost $": order_cost,

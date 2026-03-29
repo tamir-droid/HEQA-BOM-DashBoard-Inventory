@@ -971,7 +971,7 @@ with _tab_brd:
         with _bc3:
             st.markdown(_metric_card.format(label="📦 Total BOM Cost", value=f"${_brd_bom_total:,.2f}"), unsafe_allow_html=True)
         st.markdown("---")
-        _brd_details = get_brd_components_detail(bom_files, qty_map, _combined_inv_brd, prices_df)
+        _brd_details = get_brd_components_detail(bom_files, qty_map, _combined_inv_brd, prices_df, sub_inv_map=_sub_inv_map)
         for _, _brow in _brd_summary.iterrows():
             _bvpn  = _brow["BRD P/N"]
             _bdesc = _brow["Description"]
@@ -1012,6 +1012,7 @@ with _tab_brd:
                                 "Qty/BRD":       st.column_config.NumberColumn("Qty/BRD", format="%.2f"),
                                 "Required Qty":  st.column_config.NumberColumn("Required Qty", format="%g"),
                                 "In Stock":      st.column_config.NumberColumn("In Stock", format="%g"),
+                                "Sub Stc":       st.column_config.NumberColumn("Sub Stc", format="%g"),
                                 "To Order":      st.column_config.NumberColumn("To Order", format="%g"),
                                 "Unit Price $":  st.column_config.NumberColumn("Unit Price $", format="$%.4f"),
                                 "Order Cost $":  st.column_config.NumberColumn("Order Cost $", format="$%.2f"),
