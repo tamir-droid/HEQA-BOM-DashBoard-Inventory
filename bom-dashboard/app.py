@@ -597,7 +597,7 @@ with _tab_comp:
         sel_type = st.selectbox("Part Type", type_options, index=_default_type_idx)
 
     with fc2:
-        status_options = ["All", "🔴 Missing", "🟠 Tracking", "✅ In Stock", "⚠️ No Price"]
+        status_options = ["All", "🛒 Needs Order (Missing + Partial)", "🔴 Missing", "🟡 Partial", "🟠 Tracking", "✅ In Stock", "⚠️ No Price"]
         sel_status = st.selectbox(
             "Status",
             status_options,
@@ -660,11 +660,17 @@ with _tab_comp:
             df_show = df_show[~df_show[BOM_VPN_COL].str.upper().str.startswith(_BULK_PREFIXES)]
 
     if sel_status != "All":
-        if sel_status == "🔴 Missing" and COL_STATUS in df_show.columns:
-            # All missing parts — both unordered (red) and ordered-in-tracking (orange)
+        if sel_status == "🛒 Needs Order (Missing + Partial)" and COL_STATUS in df_show.columns:
+            # All parts with To Order > 0 regardless of whether fully or partially missing
+            df_show = df_show[
+                df_show[COL_STATUS].str.contains("Missing", na=False)
+                | df_show[COL_STATUS].str.contains("Partial", na=False)
+            ]
+        elif sel_status == "🔴 Missing" and COL_STATUS in df_show.columns:
             df_show = df_show[df_show[COL_STATUS].str.contains("Missing", na=False)]
+        elif sel_status == "🟡 Partial" and COL_STATUS in df_show.columns:
+            df_show = df_show[df_show[COL_STATUS].str.contains("Partial", na=False)]
         elif sel_status == "🟠 Tracking" and COL_STATUS in df_show.columns:
-            # Only missing parts where an order has been placed
             df_show = df_show[
                 df_show[COL_STATUS].str.contains("Missing", na=False)
                 & (df_show["Order Status"] == "🔵 Ordered")
